@@ -43,6 +43,9 @@ run:
 dataloader:
   num_workers: 6
   shuffle_buffer_size: 100
+  prefetch_factor: 2
+  persistent_workers: false
+  pin_memory: null  # null follows CUDA availability
 
 validation:
   batch_size: null  # null to use the same batch size as training

@@ -11,6 +11,9 @@ project_dir=${MIRA_PROJECT_DIR:-/home/ubuntu/projects/mira}
 dataset_dir=${CS1K_DATASET_DIR:-/home/ubuntu/projects/cs2_clean/data/cs1k-360p}
 run_root=${CS1K_RUN_ROOT:-/home/ubuntu/projects/mira_runs/cs2_rebuttal/20260724_g7e2}
 python_bin=${MIRA_PYTHON:-$project_dir/.pixi/envs/default/bin/python}
+dataloader_workers=${CS1K_DATALOADER_WORKERS:-4}
+dataloader_prefetch_factor=${CS1K_DATALOADER_PREFETCH_FACTOR:-2}
+dataloader_persistent_workers=${CS1K_DATALOADER_PERSISTENT_WORKERS:-true}
 
 mkdir -p "$run_root"
 cd "$project_dir"
@@ -62,8 +65,10 @@ write_status codec running
   run.checkpoint_every=5000 \
   run.checkpoint_keep_recent=3 \
   run.output_dir="$run_root/codec" \
-  dataloader.num_workers=4 \
+  dataloader.num_workers="$dataloader_workers" \
   dataloader.shuffle_buffer_size=100 \
+  dataloader.prefetch_factor="$dataloader_prefetch_factor" \
+  dataloader.persistent_workers="$dataloader_persistent_workers" \
   validation.val_first=true \
   validation.val_every=2000 \
   validation.val_n_samples=64 \
@@ -95,8 +100,10 @@ write_status single running
   run.checkpoint_every=1000 \
   run.checkpoint_keep_recent=10 \
   run.output_dir="$run_root/single" \
-  dataloader.num_workers=4 \
+  dataloader.num_workers="$dataloader_workers" \
   dataloader.shuffle_buffer_size=100 \
+  dataloader.prefetch_factor="$dataloader_prefetch_factor" \
+  dataloader.persistent_workers="$dataloader_persistent_workers" \
   validation.val_first=true \
   validation.val_every=1000 \
   validation.val_n_samples=100 \
@@ -131,8 +138,10 @@ write_status shared running
   run.checkpoint_every=1000 \
   run.checkpoint_keep_recent=10 \
   run.output_dir="$run_root/shared" \
-  dataloader.num_workers=4 \
+  dataloader.num_workers="$dataloader_workers" \
   dataloader.shuffle_buffer_size=100 \
+  dataloader.prefetch_factor="$dataloader_prefetch_factor" \
+  dataloader.persistent_workers="$dataloader_persistent_workers" \
   validation.val_first=true \
   validation.val_every=1000 \
   validation.val_n_samples=10 \

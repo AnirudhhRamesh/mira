@@ -199,6 +199,17 @@ class Auditor:
         model = config["model"]["architecture"]["config"]
         return model if arm == "single" else model["wm_config"]
 
+    @staticmethod
+    def _dataloader_config(config: dict[str, Any]) -> dict[str, Any]:
+        dataloader = config["dataloader"]
+        return {
+            "num_workers": dataloader["num_workers"],
+            "shuffle_buffer_size": dataloader["shuffle_buffer_size"],
+            "prefetch_factor": dataloader.get("prefetch_factor", 2),
+            "persistent_workers": dataloader.get("persistent_workers", False),
+            "pin_memory": dataloader.get("pin_memory"),
+        }
+
     def audit_configs(self) -> dict[str, int]:
         codec = _read_yaml(self.root / "codec" / "codec_config.yaml")
         single = _read_yaml(self.root / "single" / "world_model_config.yaml")
@@ -270,6 +281,13 @@ class Auditor:
         }
         self.require("arms.identical_inner_model", not differences, differences)
         self.require("arms.identical_optimizer", single["optim"] == shared["optim"], "optimizer mismatch")
+        single_dataloader = self._dataloader_config(single)
+        shared_dataloader = self._dataloader_config(shared)
+        self.require(
+            "arms.identical_dataloader",
+            single_dataloader == shared_dataloader,
+            {"single": single_dataloader, "shared": shared_dataloader},
+        )
 
         single_frames = (
             single["run"]["batch_size"] * single["dataset"]["n_players"] * single_inner["video"]["timesteps"]

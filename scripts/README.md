@@ -9,6 +9,8 @@ Hydra applications for training, evaluation, and serving. Each reads its config 
 - `eval_world_model_offline.py` — offline evaluation of a trained world model (validation loss +
   rollout metrics) from a checkpoint.
 - `bench_wm_speed.py` — micro-benchmark world-model rollout speed.
+- `bench_cs2_dataloader.py` — benchmark the exact Dust2 MIRA input contract across worker settings
+  and fail closed unless the fixed first-round single/synchronized video and action tensors match.
 
 See [`configs/README.md`](../configs/README.md) for the config layout and the top-level
 [`README.md`](../README.md) for example commands.

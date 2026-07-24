@@ -256,6 +256,7 @@ def create_loader(
     action_config: ActionConfig | None = None,
     prefetch_factor: int = 2,
     pin_memory: bool | None = None,
+    persistent_workers: bool = False,
 ) -> DataLoader:
     """Build a ``DataLoader`` yielding ``(VideoActionBatch, list[ClipMeta])`` from a dataset index.
 
@@ -294,10 +295,15 @@ def create_loader(
         action_config: Explicit ``ActionConfig``; built from ``valid_keys`` + fps when ``None``.
         prefetch_factor: Per-worker prefetch (only used when ``num_workers > 0``).
         pin_memory: Pin host memory; defaults to whether CUDA is available.
+        persistent_workers: Keep worker processes alive across iterator recreation. Requires
+            ``num_workers > 0``.
 
     Returns:
         A ``DataLoader`` over the dataset.
     """
+    if persistent_workers and num_workers == 0:
+        raise ValueError("persistent_workers=True requires num_workers > 0")
+
     if dataset_backend == "counterstrike1k":
         valid_keys = list(CS2_KEYS) if valid_keys is None else valid_keys
         source_fps = CS2_SOURCE_FPS
@@ -333,6 +339,7 @@ def create_loader(
             num_workers=num_workers,
             prefetch_factor=prefetch_factor if num_workers > 0 else None,
             pin_memory=torch.cuda.is_available() if pin_memory is None else pin_memory,
+            persistent_workers=persistent_workers,
             collate_fn=_collate,
         )
     if dataset_backend != "rocket_science":
@@ -376,5 +383,6 @@ def create_loader(
         num_workers=num_workers,
         prefetch_factor=prefetch_factor if num_workers > 0 else None,
         pin_memory=torch.cuda.is_available() if pin_memory is None else pin_memory,
+        persistent_workers=persistent_workers,
         collate_fn=_collate,
     )

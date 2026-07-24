@@ -38,6 +38,7 @@ Fixed controls:
 - 5.5 timed hours per arm on the same RTX PRO 6000 Blackwell Server Edition;
 - ten raw POV rows, 160 video frames, and ten action streams presented per optimizer step
   (single batch 10 versus shared group batch 1 x 10);
+- identical loader worker, prefetch, persistence, pinning, and shuffle-buffer settings in both arms;
 - final time-limit checkpoint with EMA weights; no best-test-checkpoint selection;
 - strict deterministic Torch algorithms and `CUBLAS_WORKSPACE_CONFIG=:4096:8`.
 
@@ -126,9 +127,33 @@ must not be reported as generated death-classification accuracy.
 - Do not generalize beyond Dust2, the two-second training window, one-second rollout, public
   DINOv2-based codec, or the tested compute range.
 
+## Loader systems gate
+
+The G7e pilot remains fixed at four TorchCodec CPU workers in both arms. It is not restarted or
+mutated after observing partial training curves. Before confirmatory GH200 runs, execute
+`scripts/bench_cs2_dataloader.py` on the target node type using the exact model-facing batch:
+ten POV rows, 16 frames per row, 168x308 RGB, 8 fps, and the released MIRA action reduction.
+
+The benchmark must:
+
+- compare the candidate worker/prefetch settings for both single and synchronized grouping;
+- verify byte-identical decoded video, key, and mouse tensors for the first deterministic
+  single/synchronized round before timing;
+- record the dataset manifest digest, source commit/status, command, Torch/TorchCodec/CUDA
+  versions, hardware, first-batch hashes, and per-case throughput; and
+- write an atomic JSON result and fail nonzero on any semantic or timing-case error.
+
+Changing only the number of CPU workers or queue settings is allowed after this gate because it
+does not change decoded samples. A GPU/DALI backend additionally requires a preregistered decoded
+pixel tolerance and a model-quality control because different H.264 decoders are not assumed to be
+pixel-identical. The selected loader settings are frozen identically for all confirmatory arms and
+training seeds, preserved in resolved configs and node launcher provenance, and audited separately
+from model quality.
+
 ## Reproduction entry points
 
 - Data selection/materialization: `scripts/prepare_counterstrike1k.py`
+- Exact-contract data-loader benchmark: `scripts/bench_cs2_dataloader.py`
 - G7e pilot: `scripts/run_cs2_rebuttal_pipeline.sh`
 - Paired pilot evaluation: `scripts/run_cs2_rebuttal_eval.sh`
 - Action loss diagnostic: `scripts/run_cs2_action_loss_ablation.sh`
@@ -144,10 +169,10 @@ selection, checkpoint hashes, environment lock hashes, installed packages, GPU d
 JSONL metrics needed to audit the result without W&B.
 
 The completed-pilot auditor fails closed unless the pinned Dust2 selection and split counts,
-match-disjointness, clean source provenance, exact timed stage sequence, equal 160-frame and
-ten-action-stream optimizer steps, final time-limit checkpoints, full 520-POV test cardinality,
-fixed seed sets, checkpoint hashes, evaluator provenance, and all three automatic evaluation
-watchers verify. The pilot run additionally records
+match-disjointness, clean source provenance, exact timed stage sequence, identical loader settings,
+equal 160-frame and ten-action-stream optimizer steps, final time-limit checkpoints, full 520-POV
+test cardinality, fixed seed sets, checkpoint hashes, evaluator provenance, and all automatic
+evaluation guards verify. The pilot run additionally records
 five-second `nvidia-smi` telemetry for peak-memory
 disclosure; because telemetry was enabled after the first single-arm checkpoint, single-arm peak
 memory from that trace is explicitly labeled as partial, while the shared arm is fully covered.

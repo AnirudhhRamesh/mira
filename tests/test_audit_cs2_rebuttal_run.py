@@ -92,6 +92,22 @@ def test_finite_results_rejects_nan(tmp_path: Path) -> None:
         AUDIT._finite_results({"results": {"loss": float("nan")}}, source)
 
 
+def test_dataloader_contract_normalizes_legacy_defaults(tmp_path: Path) -> None:
+    auditor = AUDIT.Auditor(tmp_path)
+    legacy = {"dataloader": {"num_workers": 4, "shuffle_buffer_size": 100}}
+    explicit = {
+        "dataloader": {
+            "num_workers": 4,
+            "shuffle_buffer_size": 100,
+            "prefetch_factor": 2,
+            "persistent_workers": False,
+            "pin_memory": None,
+        }
+    }
+
+    assert auditor._dataloader_config(legacy) == auditor._dataloader_config(explicit)
+
+
 def test_gpu_telemetry_parses_nvidia_smi_csv(tmp_path: Path) -> None:
     source = tmp_path / "provenance" / "gpu_timeseries.csv"
     source.parent.mkdir()

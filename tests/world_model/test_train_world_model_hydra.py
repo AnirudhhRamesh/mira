@@ -43,9 +43,7 @@ def _compose(overrides: list[str]):
 def test_train_world_model_config_composes() -> None:
     cfg = _compose(overrides=[])
     assert cfg.model.architecture._target_ == "mira.world_model.latent_world_model.LatentWorldModel"
-    assert (
-        cfg.model.architecture.config._target_ == "mira.world_model.config.LatentWorldModelConfig"
-    )
+    assert cfg.model.architecture.config._target_ == "mira.world_model.config.LatentWorldModelConfig"
     # Action vocabulary is interpolated from the dataset (9-key DEFAULT_RL_KEYS).
     assert len(cfg.actions.valid_keys) == 9
     assert cfg.dataset.n_players == 1
@@ -57,6 +55,9 @@ def test_train_world_model_config_composes() -> None:
     assert cfg.model.architecture.config.time_attention_every == 4
     # run.compile is opt-in (default off for reproducibility).
     assert cfg.run.compile is False
+    assert cfg.dataloader.prefetch_factor == 2
+    assert cfg.dataloader.persistent_workers is False
+    assert cfg.dataloader.pin_memory is None
     assert cfg.world_model_metrics._target_.endswith("WorldModelMetricsConfig")
 
 

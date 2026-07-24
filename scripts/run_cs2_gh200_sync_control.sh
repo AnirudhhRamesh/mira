@@ -21,6 +21,8 @@ nproc_per_node=${NPROC_PER_NODE:-1}
 master_addr=${MASTER_ADDR:?Set MASTER_ADDR to the rank-0 hostname or IP}
 master_port=${MASTER_PORT:-29500}
 dataloader_workers=${CS1K_DATALOADER_WORKERS:-8}
+dataloader_prefetch_factor=${CS1K_DATALOADER_PREFETCH_FACTOR:-2}
+dataloader_persistent_workers=${CS1K_DATALOADER_PERSISTENT_WORKERS:-true}
 
 python_bin=${MIRA_PYTHON:-$project_dir/.pixi/envs/default/bin/python}
 torchrun_bin=${TORCHRUN_BIN:-$(dirname "$python_bin")/torchrun}
@@ -86,6 +88,9 @@ printf '%s\n' \
   "nproc_per_node=$nproc_per_node" \
   "master_addr=$master_addr" \
   "master_port=$master_port" \
+  "dataloader_workers=$dataloader_workers" \
+  "dataloader_prefetch_factor=$dataloader_prefetch_factor" \
+  "dataloader_persistent_workers=$dataloader_persistent_workers" \
   >"$node_provenance/launcher.env"
 
 torchrun_args=(
@@ -124,6 +129,8 @@ for arm in "${arms[@]}"; do
     run.output_dir="$experiment_root/$arm" \
     dataloader.num_workers="$dataloader_workers" \
     dataloader.shuffle_buffer_size=100 \
+    dataloader.prefetch_factor="$dataloader_prefetch_factor" \
+    dataloader.persistent_workers="$dataloader_persistent_workers" \
     validation.val_first=true \
     validation.val_every=1000 \
     validation.val_n_samples=40 \

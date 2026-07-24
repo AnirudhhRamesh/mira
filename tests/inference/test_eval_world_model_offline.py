@@ -12,6 +12,7 @@ import importlib.util
 import math
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -110,6 +111,57 @@ def test_window_mode_cli_is_preregistered(monkeypatch) -> None:
         ["eval_world_model_offline.py", "checkpoint.pth", "--window-mode", "first-death"],
     )
     assert EVAL.parse_args().window_mode == "first-death"
+
+
+def test_eval_loader_reuses_recorded_dataloader_tuning(monkeypatch) -> None:
+    class AttrDict(dict):
+        __getattr__ = dict.__getitem__
+
+    captured = {}
+    monkeypatch.setattr(
+        "mira.data.training_loader.create_loader",
+        lambda **kwargs: captured.update(kwargs) or "loader",
+    )
+    cfg = SimpleNamespace(
+        dataset=AttrDict(
+            test_index="/dataset",
+            backend="counterstrike1k",
+            map_slug="dust2",
+            group_mode="single",
+            frame_size=[168, 308],
+        ),
+        dataloader=AttrDict(
+            num_workers=8,
+            shuffle_buffer_size=100,
+            prefetch_factor=3,
+            persistent_workers=True,
+            pin_memory=False,
+        ),
+    )
+    model = SimpleNamespace(
+        n_players=1,
+        config=SimpleNamespace(
+            video=SimpleNamespace(fps=8),
+            actions=SimpleNamespace(target_fps=8, valid_keys=["FORWARD"]),
+        ),
+    )
+
+    assert (
+        EVAL._build_loader(
+            cfg,
+            model,
+            split="val",
+            group_mode="single",
+            clip_len=16,
+            batch_size=10,
+            seed=37,
+        )
+        == "loader"
+    )
+    assert captured["num_workers"] == 8
+    assert captured["prefetch_factor"] == 3
+    assert captured["persistent_workers"] is True
+    assert captured["pin_memory"] is False
 
 
 def test_action_modes_are_deterministic_and_do_not_mutate_input() -> None:

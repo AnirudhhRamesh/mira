@@ -4,9 +4,15 @@ from pathlib import Path
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 import torch
 
 from mira.data.counterstrike import CS2_ACTION_DTYPE, CS2_KEYS
+from mira.data.counterstrike_benchmark import (
+    batch_signature,
+    validate_batch_contract,
+    verify_single_synchronized_parity,
+)
 from mira.data.training_loader import create_loader
 
 
@@ -119,3 +125,87 @@ def test_first_death_windows_are_centered_and_paired_across_arms(tmp_path, monke
     assert {meta.source_start_frame for meta in shared_meta} == {6}
     assert single_meta[0].round_id == shared_meta[0].round_id
     assert {meta.window_mode for meta in shared_meta} == {"first-death"}
+
+
+def test_single_synchronized_tensor_parity_gate(tmp_path, monkeypatch) -> None:
+    root = _fixture(tmp_path)
+
+    def fake_decode(path, indices, frame_size):
+        pov_idx = int(Path(path).stem.rsplit("__p", maxsplit=1)[1])
+        return torch.full(
+            (len(indices), 3, *frame_size),
+            pov_idx,
+            dtype=torch.uint8,
+        )
+
+    monkeypatch.setattr("mira.data.counterstrike.decode_frames", fake_decode)
+    result = verify_single_synchronized_parity(
+        root,
+        clip_len=2,
+        target_fps=8,
+        frame_size=(16, 28),
+    )
+
+    assert result["status"] == "pass"
+    assert len(result["sample_keys"]) == 10
+    assert len(result["video_sha256"]) == 64
+    assert result["source_start_frame"] == 12
+
+
+def test_benchmark_contract_and_signature_fail_closed(tmp_path, monkeypatch) -> None:
+    root = _fixture(tmp_path)
+    monkeypatch.setattr(
+        "mira.data.counterstrike.decode_frames",
+        lambda _path, indices, frame_size: torch.zeros(len(indices), 3, *frame_size, dtype=torch.uint8),
+    )
+    batch, metadata = next(iter(_loader(root, mode="synchronized", n_players=10)))
+
+    validate_batch_contract(batch, metadata, group_mode="synchronized", clip_len=2)
+    signature = batch_signature(batch, metadata)
+    assert len(signature["metadata_sha256"]) == 64
+    assert len(signature["sample_keys"]) == 10
+
+    metadata[0].source_start_frame += 1
+    with pytest.raises(ValueError, match="one source start"):
+        validate_batch_contract(batch, metadata, group_mode="synchronized", clip_len=2)
+
+
+def test_persistent_worker_loader_configuration(tmp_path) -> None:
+    root = _fixture(tmp_path)
+    loader = create_loader(
+        root,
+        dataset_backend="counterstrike1k",
+        split="train",
+        map_slug="dust2",
+        group_mode="single",
+        clip_len=2,
+        target_fps=8,
+        n_players=1,
+        batch_size=10,
+        num_workers=1,
+        shuffle=False,
+        infinite=False,
+        frame_size=(16, 28),
+        valid_keys=list(CS2_KEYS),
+        prefetch_factor=3,
+        pin_memory=False,
+        persistent_workers=True,
+    )
+
+    assert loader.num_workers == 1
+    assert loader.prefetch_factor == 3
+    assert loader.persistent_workers is True
+
+    with pytest.raises(ValueError, match="requires num_workers"):
+        create_loader(
+            root,
+            dataset_backend="counterstrike1k",
+            split="train",
+            map_slug="dust2",
+            group_mode="single",
+            clip_len=2,
+            target_fps=8,
+            n_players=1,
+            num_workers=0,
+            persistent_workers=True,
+        )
