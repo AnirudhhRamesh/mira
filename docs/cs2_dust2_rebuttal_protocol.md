@@ -1,0 +1,128 @@
+# CounterStrike-1K Dust2 MIRA rebuttal protocol
+
+This protocol is versioned before inspecting either final world-model result. It distinguishes the
+single-GPU pilot from the confirmatory matched-information experiment and fixes the held-out
+evaluation contract in advance.
+
+## Scope and data unit
+
+- Map: Dust2 only.
+- Source: CounterStrike-1K 360p WebDataset v12, materialized and verified by
+  `scripts/prepare_counterstrike1k.py`.
+- Training support: 39 matches, 835 complete ten-POV rounds, 8,350 POV rows, 95.386 aligned
+  POV-hours (the sum over the ten synchronized views inside their common temporal intersections).
+- Validation: 3 matches / 54 rounds. Test: 3 disjoint matches / 52 rounds.
+- No match may cross train, validation, or test. All ten POV rows of a round remain in one split.
+- Input: 168x308 RGB, 16 frames at 8 fps. The codec has temporal stride 2, so the model receives
+  eight latent frames covering two seconds.
+
+The canonical selection digest, full-manifest digest, source shard list, payload counts, split
+statistics, and leakage check are written beside every run. Already materialized payloads may be
+reused only if the verifier passes; otherwise the preparation script extracts the selected members
+from the derived shard list.
+
+## Pilot question: single versus shared MIRA
+
+Question: under an equal GPU wall-clock budget, does a ten-POV shared MIRA baseline trained on
+synchronized Dust2 rounds outperform a single-POV MIRA baseline?
+
+Fixed controls:
+
+- one shared, frozen codec excluded from the comparison budget;
+- identical DINOv2-B/14 codec, spatial/temporal resolution, action vocabulary, inner transformer
+  width/depth, optimizer, seed, and GPU;
+- 5.5 timed hours per arm on the same RTX PRO 6000 Blackwell Server Edition;
+- ten raw POV rows, 160 video frames, and ten action streams presented per optimizer step
+  (single batch 10 versus shared group batch 1 x 10);
+- final time-limit checkpoint with EMA weights; no best-test-checkpoint selection;
+- strict deterministic Torch algorithms and `CUBLAS_WORKSPACE_CONFIG=:4096:8`.
+
+Equal wall time is the primary compute match. Because joint spatial attention and independent
+batched attention do not have equal FLOP scaling, the report must also disclose optimizer steps,
+processed POV frames, throughput, parameter counts, and peak memory. The pilot is evidence about
+the released training path, not by itself a causal estimate of synchronization.
+
+## Confirmatory question: synchronization versus matched shuffled information
+
+Question: holding the ten-player architecture and information volume fixed, does training on POVs
+from the same synchronized round improve prediction relative to ten POVs drawn from different
+rounds?
+
+`group_mode=synchronized` and `group_mode=shuffled` use:
+
+- the same ten-player wrapper, token/action counts, global batch, codec, initialization seed,
+  optimizer, four-node GH200 topology, and per-arm wall-clock budget;
+- the same fixed splits and complete-round eligibility rule;
+- different training grouping only.
+
+Both trained models are evaluated on synchronized test groups. Evaluating the shuffled-trained arm
+on shuffled groups would change the estimand and is prohibited. Run at least three training seeds;
+counterbalance arm order across seeds. `scripts/run_cs2_gh200_sync_control.sh` runs one seed and
+accepts an explicit arm order, while `scripts/run_cs2_gh200_sync_control_eval.sh` forces synchronized
+test grouping.
+
+## Held-out endpoints
+
+The test suite evaluates every one of the 52 complete test rounds at its deterministic midpoint,
+which is 520 raw POV clips per model and seed.
+
+Primary endpoints:
+
+1. held-out diffusion `loss_total`;
+2. Frechet DINO distance versus the codec reconstruction after four unrolled latent frames
+   (one generated second).
+
+Secondary endpoints:
+
+- raw Frechet DINO and Inception distances;
+- DINO cosine/L2 and latent drift;
+- PSNR, LPIPS, and SSIM;
+- codec reconstruction floor;
+- denoising latency and raw-POV latent throughput;
+- train/validation curves at equal wall time and matched processed frames.
+
+The metric backbone is public `dinov2_vitb14` for all arms. Test rollout seeds are fixed to
+37, 38, and 39 for the pilot and 37 through 41 for the GH200 control. Validation, rollout-metric,
+and speed phases reseed independently so enabling or skipping one phase cannot change another.
+Sample counts must divide batch size exactly; silent truncation is an error.
+
+## Action-conditioning diagnostic
+
+For each final pilot checkpoint, validation diffusion loss is recomputed on all 520 test POV rows
+with the same videos, windows, and diffusion RNG under:
+
+- true actions;
+- actions cyclically shifted across POV rows;
+- actions shifted by half a clip in time;
+- zero keyboard/mouse actions.
+
+The paired quantity is `ablated loss - true-action loss`; positive values indicate that the model
+uses the correctly aligned actions. Zero actions are an out-of-distribution diagnostic, not the
+primary comparison. This diagnostic does not replace event-level evaluation and must not be
+described as proof of causal event fidelity.
+
+## Reporting and interpretation
+
+- Preserve individual seed JSON files; never report only the best seed.
+- Report per-arm mean and sample standard deviation, plus paired arm deltas.
+- For the confirmatory result, training-seed variation is the inferential unit. Multiple rollout
+  seeds measure sampler variation and are not independent training replicates.
+- Report failures and restarts. A run that fails before completing an optimizer step is a preflight
+  failure, not a zero-valued result.
+- Do not claim a synchronization benefit from the pilot alone. The synchronized-vs-shuffled shared
+  architecture is the matched-information test.
+- Do not generalize beyond Dust2, the two-second training window, one-second rollout, public
+  DINOv2-based codec, or the tested compute range.
+
+## Reproduction entry points
+
+- Data selection/materialization: `scripts/prepare_counterstrike1k.py`
+- G7e pilot: `scripts/run_cs2_rebuttal_pipeline.sh`
+- Paired pilot evaluation: `scripts/run_cs2_rebuttal_eval.sh`
+- Action loss diagnostic: `scripts/run_cs2_action_loss_ablation.sh`
+- GH200 matched control: `scripts/run_cs2_gh200_sync_control.sh`
+- GH200 held-out evaluation: `scripts/run_cs2_gh200_sync_control_eval.sh`
+
+Every launcher records the code commit/status/patch, resolved Hydra configuration, dataset
+selection, checkpoint hashes, environment lock hashes, installed packages, GPU details, and local
+JSONL metrics needed to audit the result without W&B.
