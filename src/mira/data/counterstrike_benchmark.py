@@ -325,6 +325,19 @@ def _git_value(args: list[str], cwd: Path) -> str | None:
         return None
 
 
+def _command_output(args: list[str]) -> str | None:
+    try:
+        return subprocess.run(
+            args,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+
+
 def _package_version(name: str) -> str | None:
     try:
         return importlib.metadata.version(name)
@@ -341,6 +354,7 @@ def collect_provenance(data_root: Path) -> dict[str, Any]:
         else data_root / "manifest.parquet"
     )
     git_status = _git_value(["status", "--porcelain=v1"], project_root)
+    download_manifest = data_root / "hf_download_manifest.tsv"
     return {
         "generated_at_utc": _utc_now(),
         "command": shlex.join(sys.argv),
@@ -349,16 +363,33 @@ def collect_provenance(data_root: Path) -> dict[str, Any]:
         "platform": platform.platform(),
         "python": sys.version,
         "cpu_count": os.cpu_count(),
+        "torch_num_threads": torch.get_num_threads(),
         "torch": torch.__version__,
         "torchcodec": _package_version("torchcodec"),
         "cuda_runtime": torch.version.cuda,
         "cuda_available": torch.cuda.is_available(),
         "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        "lscpu_json": _command_output(["lscpu", "--json"]),
+        "memory_bytes": _command_output(["awk", "/MemTotal/ {print $2 * 1024}", "/proc/meminfo"]),
+        "data_mount": _command_output(["findmnt", "--json", "--target", str(data_root)]),
+        "block_devices": _command_output(["lsblk", "--json", "--bytes", "--output", "NAME,SIZE,TYPE"]),
+        "nvidia_smi": _command_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,uuid,driver_version,memory.total",
+                "--format=csv,noheader",
+            ]
+        ),
+        "ffmpeg_version": _command_output(["ffmpeg", "-version"]),
         "git_commit": _git_value(["rev-parse", "HEAD"], project_root),
         "git_status": git_status,
         "git_clean": git_status == "",
         "manifest_path": str(manifest),
         "manifest_sha256": _sha256_file(manifest),
+        "hf_download_manifest_path": str(download_manifest) if download_manifest.is_file() else None,
+        "hf_download_manifest_sha256": (
+            _sha256_file(download_manifest) if download_manifest.is_file() else None
+        ),
     }
 
 
