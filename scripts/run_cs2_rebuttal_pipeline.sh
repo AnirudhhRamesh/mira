@@ -27,7 +27,17 @@ git rev-parse HEAD >"$run_root/provenance/code_commit.txt"
 git status --porcelain=v1 >"$run_root/provenance/code_status.txt"
 git diff --binary >"$run_root/provenance/code.patch"
 sha256sum pixi.lock pyproject.toml >"$run_root/provenance/environment_files.sha256"
-"$python_bin" -m pip freeze >"$run_root/provenance/pip_freeze.txt"
+"$python_bin" - <<'PY' >"$run_root/provenance/installed_packages.txt"
+from importlib.metadata import distributions
+
+packages = sorted(
+    (distribution.metadata["Name"], distribution.version)
+    for distribution in distributions()
+    if distribution.metadata["Name"]
+)
+for name, version in packages:
+    print(f"{name}=={version}")
+PY
 nvidia-smi -q >"$run_root/provenance/nvidia_smi_q.txt"
 uname -a >"$run_root/provenance/uname.txt"
 
