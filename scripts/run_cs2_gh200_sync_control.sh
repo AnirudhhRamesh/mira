@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# Four-node GH200 synchronized-vs-shuffled matched-information ablation.
+#
+# Launch this same script on every node with NODE_RANK=0..NNODES-1 and a shared MASTER_ADDR,
+# CS1K_DATASET_DIR, CS1K_CODEC_CHECKPOINT, and CS1K_OUTPUT_ROOT. Each arm uses the identical
+# ten-player architecture, global batch, action/video volume, seed, GPU topology, and wall-clock
+# budget; only whether the ten POVs come from the same synchronized round changes.
+set -euo pipefail
+
+project_dir=${MIRA_PROJECT_DIR:-$PWD}
+dataset_dir=${CS1K_DATASET_DIR:?Set CS1K_DATASET_DIR on every node}
+codec_checkpoint=${CS1K_CODEC_CHECKPOINT:?Set CS1K_CODEC_CHECKPOINT on every node}
+output_root=${CS1K_OUTPUT_ROOT:?Set CS1K_OUTPUT_ROOT to a shared result directory}
+arm_hours=${CS1K_ARM_HOURS:?Set the per-arm wall-clock budget}
+seed=${CS1K_SEED:-28}
+arm_order=${CS1K_ARM_ORDER:-synchronized,shuffled}
+
+nnodes=${NNODES:-4}
+node_rank=${NODE_RANK:?Set NODE_RANK=0..NNODES-1}
+nproc_per_node=${NPROC_PER_NODE:-1}
+master_addr=${MASTER_ADDR:?Set MASTER_ADDR to the rank-0 hostname or IP}
+master_port=${MASTER_PORT:-29500}
+dataloader_workers=${CS1K_DATALOADER_WORKERS:-8}
+
+python_bin=${MIRA_PYTHON:-$project_dir/.pixi/envs/default/bin/python}
+torchrun_bin=${TORCHRUN_BIN:-$(dirname "$python_bin")/torchrun}
+
+cd "$project_dir"
+export PYTHONPATH="$project_dir/src${PYTHONPATH:+:$PYTHONPATH}"
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
+export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+export NCCL_DEBUG=${NCCL_DEBUG:-INFO}
+export WANDB_MODE=disabled
+
+if [[ ! -f "$codec_checkpoint" ]]; then
+  echo "Codec checkpoint not found: $codec_checkpoint" >&2
+  exit 1
+fi
+IFS=, read -r -a arms <<<"$arm_order"
+if [[ ${#arms[@]} -ne 2 ]]; then
+  echo "CS1K_ARM_ORDER must contain exactly two comma-separated arms" >&2
+  exit 1
+fi
+for arm in "${arms[@]}"; do
+  if [[ "$arm" != synchronized && "$arm" != shuffled ]]; then
+    echo "Unsupported arm $arm; expected synchronized or shuffled" >&2
+    exit 1
+  fi
+done
+if [[ "${arms[0]}" == "${arms[1]}" ]]; then
+  echo "CS1K_ARM_ORDER must contain synchronized and shuffled once each" >&2
+  exit 1
+fi
+
+experiment_root=$output_root/seed_$seed
+node_provenance=$experiment_root/provenance/node_$node_rank
+mkdir -p "$node_provenance"
+"$python_bin" scripts/prepare_counterstrike1k.py \
+  --data-root "$dataset_dir" \
+  --map-slug dust2 \
+  --provenance-output "$node_provenance/dataset.json"
+git rev-parse HEAD >"$node_provenance/code_commit.txt"
+git status --porcelain=v1 >"$node_provenance/code_status.txt"
+git diff --binary >"$node_provenance/code.patch"
+sha256sum "$codec_checkpoint" >"$node_provenance/codec_checkpoint.sha256"
+sha256sum pixi.lock pyproject.toml >"$node_provenance/environment_files.sha256"
+"$python_bin" - <<'PY' >"$node_provenance/installed_packages.txt"
+from importlib.metadata import distributions
+
+packages = sorted(
+    (distribution.metadata["Name"], distribution.version)
+    for distribution in distributions()
+    if distribution.metadata["Name"]
+)
+for name, version in packages:
+    print(f"{name}=={version}")
+PY
+nvidia-smi -q >"$node_provenance/nvidia_smi_q.txt"
+uname -a >"$node_provenance/uname.txt"
+printf '%s\n' \
+  "seed=$seed" \
+  "arm_hours=$arm_hours" \
+  "arm_order=$arm_order" \
+  "nnodes=$nnodes" \
+  "nproc_per_node=$nproc_per_node" \
+  "master_addr=$master_addr" \
+  "master_port=$master_port" \
+  >"$node_provenance/launcher.env"
+
+torchrun_args=(
+  --nnodes "$nnodes"
+  --nproc-per-node "$nproc_per_node"
+  --node-rank "$node_rank"
+  --master-addr "$master_addr"
+  --master-port "$master_port"
+)
+
+write_status() {
+  if [[ "$node_rank" == 0 ]]; then
+    printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" \
+      >>"$experiment_root/status.tsv"
+  fi
+}
+
+for arm in "${arms[@]}"; do
+  write_status "$arm" running
+  "$torchrun_bin" "${torchrun_args[@]}" scripts/train_world_model.py \
+    model=multi_wrapper_world_model_cs2_small \
+    dataset=counterstrike1k_dust2 \
+    dataset.train_index="$dataset_dir" \
+    dataset.n_players=10 \
+    dataset.group_mode="$arm" \
+    model.architecture.config.wm_config.codec_checkpoint="$codec_checkpoint" \
+    run.seed="$seed" \
+    run.steps=100000000 \
+    run.batch_size=1 \
+    run.deterministic=true \
+    run.compile=false \
+    run.max_duration_hours="$arm_hours" \
+    run.log_every=25 \
+    run.checkpoint_every=1000 \
+    run.checkpoint_keep_recent=10 \
+    run.output_dir="$experiment_root/$arm" \
+    dataloader.num_workers="$dataloader_workers" \
+    dataloader.shuffle_buffer_size=100 \
+    validation.val_first=true \
+    validation.val_every=1000 \
+    validation.val_n_samples=40 \
+    validation.downstream_val_every=100000000 \
+    optim.scheduler.warmup_steps=500 \
+    optim.model_ema_decay=0.999 \
+    world_model_metrics.n_context_frames=8 \
+    world_model_metrics.num_unrolled_frames=4 \
+    world_model_metrics.drift_metric_frames=4 \
+    world_model_metrics.fdd_slice_frames=2 \
+    world_model_metrics.dino_model=dinov2_vitb14 \
+    world_model_metrics.num_samples=40 \
+    world_model_metrics.per_device_batch_size=1 \
+    world_model_metrics.num_viz_samples=2 \
+    wandb.mode=disabled
+  write_status "$arm" complete
+done
+
+write_status ablation complete

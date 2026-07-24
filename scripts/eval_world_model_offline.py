@@ -217,6 +217,7 @@ def _build_loader(
     model: "LatentWorldModel",
     *,
     split: str,
+    group_mode: str | None,
     clip_len: int,
     batch_size: int,
     seed: int,
@@ -230,7 +231,7 @@ def _build_loader(
         dataset_backend=cfg.dataset.get("backend", "rocket_science"),
         split=split,
         map_slug=cfg.dataset.get("map_slug"),
-        group_mode=cfg.dataset.get("group_mode"),
+        group_mode=group_mode or cfg.dataset.get("group_mode"),
         clip_len=clip_len,
         target_fps=model.config.video.fps,
         action_fps=model.config.actions.target_fps,
@@ -274,6 +275,12 @@ def parse_args() -> argparse.Namespace:
         "--dino-model",
         default=None,
         help="DINO metrics backbone, e.g. public dinov2_vitb14.",
+    )
+    parser.add_argument(
+        "--group-mode",
+        choices=["single", "synchronized", "shuffled"],
+        default=None,
+        help="Override eval grouping (e.g. evaluate a shuffled-trained model on synchronized POVs).",
     )
     parser.add_argument("--seed", type=int, default=37, help="Base deterministic eval seed.")
     parser.add_argument(
@@ -361,6 +368,7 @@ def main() -> None:
     checkpoint = resolve_checkpoint(args.checkpoint).resolve()
     cfg = load_run_config(checkpoint)
     eval_split = args.split or cfg.dataset.get("test_split", "test")
+    eval_group_mode = args.group_mode or cfg.dataset.get("group_mode")
     output_dir = args.output_dir or (checkpoint.parent / "offline_eval")
 
     model, _ = load_world_model(checkpoint, device=device)
@@ -399,6 +407,7 @@ def main() -> None:
             cfg,
             model,
             split=eval_split,
+            group_mode=eval_group_mode,
             clip_len=model.config.video.timesteps,
             batch_size=batch_size,
             seed=args.seed,
@@ -424,6 +433,7 @@ def main() -> None:
             cfg,
             model,
             split=eval_split,
+            group_mode=eval_group_mode,
             clip_len=model.config.n_context_frames + eval_config.num_unrolled_frames * stride,
             batch_size=eval_config.per_device_batch_size,
             seed=args.seed + 1,
@@ -448,6 +458,7 @@ def main() -> None:
                 cfg,
                 model,
                 split=eval_split,
+                group_mode=eval_group_mode,
                 clip_len=model.config.n_context_frames + SPEED_BENCH_FRAMES * model.temporal_downsampling,
                 batch_size=eval_config.per_device_batch_size,
                 seed=args.seed + 2,
@@ -477,7 +488,8 @@ def main() -> None:
             "deterministic": args.deterministic,
             "dataset_backend": cfg.dataset.get("backend", "rocket_science"),
             "map_slug": cfg.dataset.get("map_slug"),
-            "group_mode": cfg.dataset.get("group_mode"),
+            "group_mode": eval_group_mode,
+            "training_group_mode": cfg.dataset.get("group_mode"),
             "n_players": n_players,
             "dino_model": eval_config.dino_model,
             "world_model_metrics": eval_config.model_dump(),

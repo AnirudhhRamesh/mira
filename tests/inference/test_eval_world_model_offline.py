@@ -170,6 +170,7 @@ def test_offline_eval_end_to_end_real_checkpoint() -> None:
         cfg,
         model,
         split=cfg.dataset.get("test_split", "test"),
+        group_mode=cfg.dataset.get("group_mode"),
         clip_len=model.config.video.timesteps,
         batch_size=batch_size,
         seed=37,

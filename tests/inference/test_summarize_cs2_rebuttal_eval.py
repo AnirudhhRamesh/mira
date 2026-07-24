@@ -75,3 +75,29 @@ def test_summarize_rejects_unequal_raw_pov_rows(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="raw POV rows differ"):
         SUMMARY.summarize(tmp_path)
+
+
+def test_summarize_supports_synchronized_vs_shuffled_training_control(tmp_path) -> None:
+    seed_dir = tmp_path / "seed_37"
+    seed_dir.mkdir()
+    for name, metric in (("shuffled", 2.0), ("synchronized", 1.0)):
+        payload = _payload("shared", 37, metric)
+        payload["checkpoint_sha256"] = f"{name}-checkpoint"
+        payload["training_group_mode"] = name
+        (seed_dir / f"{name}.json").write_text(json.dumps(payload))
+
+    result = SUMMARY.summarize(
+        tmp_path,
+        arm_a_name="shuffled",
+        arm_b_name="synchronized",
+        arm_a_eval_group_mode="synchronized",
+        arm_b_eval_group_mode="synchronized",
+        arm_a_n_players=10,
+        arm_b_n_players=10,
+        arm_a_training_group_mode="shuffled",
+        arm_b_training_group_mode="synchronized",
+    )
+
+    paired = result["paired"]["test/loss_total"]
+    assert paired["synchronized_minus_shuffled"]["mean"] == -1.0
+    assert paired["synchronized_improvement"]["mean"] == 1.0
