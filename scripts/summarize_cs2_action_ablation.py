@@ -56,6 +56,38 @@ def _validate_mode_pair(true: dict[str, Any], ablated: dict[str, Any], source: P
         raise ValueError(f"{source}: action ablation changed result metric keys")
 
 
+def _validate_arm_pair(single: dict[str, Any], shared: dict[str, Any], source: Path) -> None:
+    for field in ("split", "seed", "deterministic", "map_slug", "action_mode"):
+        if single.get(field) != shared.get(field):
+            raise ValueError(
+                f"{source}: paired field {field!r} differs: "
+                f"single={single.get(field)!r}, shared={shared.get(field)!r}"
+            )
+    expected_contracts = {
+        "single": (single, "single", "single", 1),
+        "shared": (shared, "synchronized", "synchronized", 10),
+    }
+    for arm, (payload, group_mode, training_group_mode, n_players) in expected_contracts.items():
+        observed = (
+            payload.get("group_mode"),
+            payload.get("training_group_mode"),
+            payload.get("n_players"),
+        )
+        expected = (group_mode, training_group_mode, n_players)
+        if observed != expected:
+            raise ValueError(f"{source}: {arm} arm contract must be {expected}, got {observed}")
+    if not single.get("deterministic"):
+        raise ValueError(f"{source}: strict deterministic evaluation was not enabled")
+    single_rows = single["validation"]["total_raw_pov_rows"]
+    shared_rows = shared["validation"]["total_raw_pov_rows"]
+    if single_rows != shared_rows:
+        raise ValueError(
+            f"{source}: paired validation raw POV rows differ: single={single_rows}, shared={shared_rows}"
+        )
+    if set(single["results"]) != set(shared["results"]):
+        raise ValueError(f"{source}: single/shared result metric keys differ")
+
+
 def summarize(root: Path) -> dict[str, Any]:
     seed_dirs = sorted(path for path in root.glob("seed_*") if path.is_dir())
     if not seed_dirs:
@@ -65,10 +97,12 @@ def summarize(root: Path) -> dict[str, Any]:
         arm: {mode: [] for mode in ACTION_MODES} for arm in ARMS
     }
     for seed_dir in seed_dirs:
+        true_by_arm: dict[str, dict[str, Any]] = {}
         for arm in ARMS:
             true = _read(seed_dir / arm / "true.json")
             if true.get("action_mode") != "true":
                 raise ValueError(f"{seed_dir}/{arm}: true.json is not action_mode=true")
+            true_by_arm[arm] = true
             payloads[arm]["true"].append(true)
             for mode in ACTION_MODES[1:]:
                 ablated = _read(seed_dir / arm / f"{mode}.json")
@@ -78,6 +112,7 @@ def summarize(root: Path) -> dict[str, Any]:
                     )
                 _validate_mode_pair(true, ablated, seed_dir / arm)
                 payloads[arm][mode].append(ablated)
+        _validate_arm_pair(true_by_arm["single"], true_by_arm["shared"], seed_dir)
 
     seeds = [int(payload["seed"]) for payload in payloads["single"]["true"]]
     if len(set(seeds)) != len(seeds):

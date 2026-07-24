@@ -67,3 +67,27 @@ def test_summarize_action_ablation_rejects_checkpoint_drift(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="changed checkpoint_sha256"):
         SUMMARY.summarize(tmp_path)
+
+
+def test_summarize_action_ablation_rejects_arm_row_mismatch(tmp_path) -> None:
+    _write_seed(tmp_path, 37)
+    for mode in SUMMARY.ACTION_MODES:
+        path = tmp_path / "seed_37" / "shared" / f"{mode}.json"
+        payload = json.loads(path.read_text())
+        payload["validation"]["total_raw_pov_rows"] = 510
+        path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="paired validation raw POV rows differ"):
+        SUMMARY.summarize(tmp_path)
+
+
+def test_summarize_action_ablation_rejects_arm_seed_mismatch(tmp_path) -> None:
+    _write_seed(tmp_path, 37)
+    for mode in SUMMARY.ACTION_MODES:
+        path = tmp_path / "seed_37" / "shared" / f"{mode}.json"
+        payload = json.loads(path.read_text())
+        payload["seed"] = 99
+        path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="paired field 'seed' differs"):
+        SUMMARY.summarize(tmp_path)

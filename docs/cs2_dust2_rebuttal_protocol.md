@@ -21,6 +21,10 @@ statistics, and leakage check are written beside every run. Already materialized
 reused only if the verifier passes; otherwise the preparation script extracts the selected members
 from the derived shard list.
 
+For the v12 360p release used here, the canonical selection SHA-256 is
+`5b4733ba910c96221b06923699b6595b27b23ec9659cb1b15032bbf7dceb9cf9` and the full manifest
+SHA-256 is `e6d1199595327ccbed7a79760266f1c30fdcf23b717232705c9b11bb6d8707d3`.
+
 ## Pilot question: single versus shared MIRA
 
 Question: under an equal GPU wall-clock budget, does a ten-POV shared MIRA baseline trained on
@@ -122,7 +126,16 @@ described as proof of causal event fidelity.
 - Action loss diagnostic: `scripts/run_cs2_action_loss_ablation.sh`
 - GH200 matched control: `scripts/run_cs2_gh200_sync_control.sh`
 - GH200 held-out evaluation: `scripts/run_cs2_gh200_sync_control_eval.sh`
+- Completed pilot audit: `scripts/audit_cs2_rebuttal_run.py`
 
 Every launcher records the code commit/status/patch, resolved Hydra configuration, dataset
 selection, checkpoint hashes, environment lock hashes, installed packages, GPU details, and local
 JSONL metrics needed to audit the result without W&B.
+
+The completed-pilot auditor fails closed unless the pinned Dust2 selection and split counts,
+match-disjointness, clean source provenance, exact timed stage sequence, equal 160-frame and
+ten-action-stream optimizer steps, final time-limit checkpoints, full 520-POV test cardinality,
+fixed seed sets, checkpoint hashes, evaluator provenance, and both automatic evaluation watchers
+all verify. The pilot run additionally records five-second `nvidia-smi` telemetry for peak-memory
+disclosure; because telemetry was enabled after the first single-arm checkpoint, single-arm peak
+memory from that trace is explicitly labeled as partial, while the shared arm is fully covered.
