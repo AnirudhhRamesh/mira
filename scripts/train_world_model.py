@@ -19,12 +19,13 @@ data-dependent control flow, so compiling the whole module would graph-break eve
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import random
 import time
 from collections import defaultdict
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import hydra
@@ -46,6 +47,7 @@ from mira.training.metrics.world_model_metrics import (
     WorldModelMetricsConfig,
     build_frechet_curve_plots,
 )
+from mira.training.reproducibility import seed_everything
 from mira.training.tracker import TrainingTracker, display_execution_time, periodic_event
 from mira.training.visualization import (
     VideoForWandb,
@@ -57,6 +59,24 @@ from mira.world_model.latent_world_model import InferenceOutputs, LatentWorldMod
 logging.basicConfig(format="%(message)s", datefmt="[%X]", handlers=[RichHandler()])
 
 logger = logging.getLogger(__name__)
+
+
+def _jsonable(value):
+    if isinstance(value, torch.Tensor):
+        return value.detach().item() if value.numel() == 1 else value.detach().cpu().tolist()
+    if isinstance(value, Path):
+        return str(value)
+    return value
+
+
+def _log_jsonl(cfg: DictConfig, record: dict) -> None:
+    """Append a dependency-free local metrics record even when W&B is disabled/offline."""
+    path = Path(cfg.run.output_dir) / "metrics.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {key: _jsonable(value) for key, value in record.items()}
+    payload["timestamp_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
 def _autocast(device: int | str | torch.device):
@@ -77,7 +97,10 @@ def train(cfg: DictConfig) -> None:
     is_main_process = distributed_settings.is_main_process
     device = distributed_settings.device
 
-    torch.manual_seed(cfg.run.seed + distributed_settings.rank)
+    seed_everything(
+        cfg.run.seed + distributed_settings.rank,
+        deterministic=bool(cfg.run.get("deterministic", False)),
+    )
     logging.getLogger().setLevel(logging.INFO if is_main_process else logging.ERROR)
 
     logger.info("[magenta]" + "=" * 60 + "[/magenta]")
@@ -148,6 +171,8 @@ def train(cfg: DictConfig) -> None:
     # pytorch_fid. If those are unavailable, downstream metrics are skipped for the rest of training.
     wm_metrics: WorldModelMetrics | None = None
     wm_metrics_disabled = False
+    training_start_time = time.monotonic()
+    max_duration_hours = cfg.run.get("max_duration_hours")
 
     losses: dict[str, torch.Tensor] = {}
     iter_num = start_step - 1  # well-defined for the final save below if the loop never runs
@@ -174,8 +199,10 @@ def train(cfg: DictConfig) -> None:
             stats["train/learning_rate"] = optimizer.param_groups[0]["lr"]
             if is_main_process:
                 stats["System/step_ms"] = (time.monotonic() - step_start_time) * 1000
+                stats["System/elapsed_wall_seconds"] = time.monotonic() - training_start_time
                 logger.info(f"Step {iter_num}: total loss {stats['train/loss_total']:.4f}")
                 _wandb_log(stats, step=iter_num)
+                _log_jsonl(cfg, {"kind": "train", "step": iter_num, **stats})
 
         if periodic_event(
             iter_num, cfg.validation.val_every, cfg.run.steps, include_0=cfg.validation.val_first
@@ -211,6 +238,26 @@ def train(cfg: DictConfig) -> None:
 
         if is_distributed:
             dist.barrier()
+
+        if (
+            max_duration_hours is not None
+            and time.monotonic() - training_start_time >= float(max_duration_hours) * 3600
+        ):
+            if is_main_process:
+                logger.info(
+                    "Reached run.max_duration_hours=%.3f after step %d; saving final checkpoint.",
+                    float(max_duration_hours),
+                    iter_num,
+                )
+                _log_jsonl(
+                    cfg,
+                    {
+                        "kind": "time_limit",
+                        "step": iter_num,
+                        "elapsed_wall_seconds": time.monotonic() - training_start_time,
+                    },
+                )
+            break
 
     if is_main_process and iter_num >= start_step:  # skip when resuming an already-finished run
         checkpoint_manager.maybe_save_checkpoint(
@@ -254,6 +301,15 @@ def run_validation(
             f"Validation at step {iter_num}: " + ", ".join(f"{k}={v:.4f}" for k, v in metrics.items())
         )
         _wandb_log({f"test/{k}": v for k, v in metrics.items()}, step=iter_num)
+        _log_jsonl(
+            cfg,
+            {
+                "kind": "validation",
+                "step": iter_num,
+                "duration_seconds": time.time() - t1,
+                **{f"test/{k}": v for k, v in metrics.items()},
+            },
+        )
 
     model.train()
     if torch.cuda.is_available():
@@ -367,6 +423,9 @@ def _create_dataloaders(cfg: DictConfig, wm_metrics_config: WorldModelMetricsCon
         model.set_inference_context(wm_metrics_config.n_context_frames)
 
     common = dict(
+        dataset_backend=cfg.dataset.get("backend", "rocket_science"),
+        map_slug=cfg.dataset.get("map_slug"),
+        group_mode=cfg.dataset.get("group_mode"),
         target_fps=model.config.video.fps,
         # Actions are sampled at their own rate, decoupled from the frame rate. The released default
         # has both at 20fps (one action per video frame), so this is a no-op; setting actions.target_fps
@@ -383,26 +442,32 @@ def _create_dataloaders(cfg: DictConfig, wm_metrics_config: WorldModelMetricsCon
 
     train_loader = create_loader(
         index_path=cfg.dataset.train_index,
+        split=cfg.dataset.get("train_split", "train"),
         clip_len=model.config.video.timesteps,
         batch_size=cfg.run.batch_size,
         seed=cfg.run.seed,
         exclude_replays=cfg.dataset.exclude_replays,
+        shuffle=True,
         **common,
     )
     val_loader = create_loader(
         index_path=cfg.dataset.test_index,
+        split=cfg.dataset.get("test_split", "test"),
         clip_len=model.config.video.timesteps,
         batch_size=cfg.validation.batch_size or cfg.run.batch_size,
         seed=37,
         exclude_replays=True,
+        shuffle=False,
         **common,
     )
     metrics_loader = create_loader(
         index_path=cfg.dataset.test_index,
+        split=cfg.dataset.get("test_split", "test"),
         clip_len=model.config.n_context_frames + wm_metrics_config.num_unrolled_frames * stride,
         batch_size=wm_metrics_config.per_device_batch_size,
         seed=38,
         exclude_replays=True,
+        shuffle=False,
         **common,
     )
     return train_loader, val_loader, metrics_loader

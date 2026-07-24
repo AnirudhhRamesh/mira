@@ -115,6 +115,7 @@ class LatentWorldModel(nn.Module):
             dim=config.hidden_dim,
             temporal_downsampling=self.action_temporal_downsampling,
             dropout_prob=config.dropout_action_prob,
+            max_mouse_movement=config.max_mouse_movement,
             learned_temporal_pool=config.learned_temporal_pool,
             dropout_action_per_player=config.dropout_action_per_player,
             key_field_names=config.actions.valid_keys,

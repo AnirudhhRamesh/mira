@@ -38,6 +38,7 @@ train = [
     "rich",
     "torchmetrics",
     "termcolor",
+    "pyarrow>=14",
 ]
 # Offline world-model metrics: Frechet DINO/Inception (DINO loads via torch.hub). Heavy and
 # eval-only, deliberately kept out of `train`; the trainer's downstream-metrics eval logs and
