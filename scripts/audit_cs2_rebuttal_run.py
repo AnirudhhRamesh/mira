@@ -422,6 +422,53 @@ class Auditor:
         )
         return commit
 
+    def _audit_result_identity(
+        self,
+        *,
+        check_prefix: str,
+        path: Path,
+        payload: dict[str, Any],
+        arm: str,
+        seed: int,
+        action_mode: str,
+        window_mode: str,
+        checkpoint_hashes: dict[str, str],
+    ) -> None:
+        expected_arms = {
+            "single": {
+                "n_players": 1,
+                "group_mode": "single",
+                "training_group_mode": "single",
+            },
+            "shared": {
+                "n_players": 10,
+                "group_mode": "synchronized",
+                "training_group_mode": "synchronized",
+            },
+        }
+        identity = f"{check_prefix}.{path.relative_to(self.root)}"
+        self.require(f"{identity}.arm", arm in expected_arms, arm)
+        expected = expected_arms[arm]
+        fields = {
+            "dataset_backend": "counterstrike1k",
+            "split": "test",
+            "map_slug": "dust2",
+            "deterministic": True,
+            "seed": seed,
+            "n_players": expected["n_players"],
+            "group_mode": expected["group_mode"],
+            "training_group_mode": expected["training_group_mode"],
+            "action_mode": action_mode,
+            "window_mode": window_mode,
+            "checkpoint_sha256": checkpoint_hashes[arm],
+        }
+        for field_name, expected_value in fields.items():
+            self.require(
+                f"{identity}.{field_name}",
+                payload.get(field_name) == expected_value,
+                {"expected": expected_value, "observed": payload.get(field_name)},
+            )
+
     def audit_primary_evaluation(self, checkpoint_hashes: dict[str, str]) -> dict[str, Any]:
         root = self.root / "evaluation" / "test_seed_sweep"
         evaluator_commit = self._audit_eval_provenance(root)
@@ -446,10 +493,17 @@ class Auditor:
         for path in result_paths:
             payload = _read_json(path)
             _finite_results(payload, path)
-            self.require(
-                f"primary_eval.{path.parent.name}.{path.stem}.test",
-                payload["split"] == "test",
-                payload["split"],
+            arm = path.stem
+            seed = int(path.parent.name.removeprefix("seed_"))
+            self._audit_result_identity(
+                check_prefix="primary_eval",
+                path=path,
+                payload=payload,
+                arm=arm,
+                seed=seed,
+                action_mode="true",
+                window_mode="midpoint",
+                checkpoint_hashes=checkpoint_hashes,
             )
             self.require(
                 f"primary_eval.{path.parent.name}.{path.stem}.raw_rows",
@@ -493,10 +547,18 @@ class Auditor:
         for path in result_paths:
             payload = _read_json(path)
             _finite_results(payload, path)
-            self.require(
-                f"{check_prefix}.{path.parent.parent.name}.{path.parent.name}.{path.stem}.test",
-                payload["split"] == "test",
-                payload["split"],
+            arm = path.parent.name
+            seed = int(path.parent.parent.name.removeprefix("seed_"))
+            action_mode = path.stem
+            self._audit_result_identity(
+                check_prefix=check_prefix,
+                path=path,
+                payload=payload,
+                arm=arm,
+                seed=seed,
+                action_mode=action_mode,
+                window_mode=window_mode,
+                checkpoint_hashes=checkpoint_hashes,
             )
             self.require(
                 f"{check_prefix}.{path.parent.parent.name}.{path.parent.name}.{path.stem}.raw_rows",

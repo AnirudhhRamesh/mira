@@ -5,6 +5,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -90,6 +91,72 @@ def test_finite_results_rejects_nan(tmp_path: Path) -> None:
     source = tmp_path / "result.json"
     with pytest.raises(ValueError, match="non-finite"):
         AUDIT._finite_results({"results": {"loss": float("nan")}}, source)
+
+
+def _result_identity_payload() -> dict:
+    return {
+        "dataset_backend": "counterstrike1k",
+        "split": "test",
+        "map_slug": "dust2",
+        "deterministic": True,
+        "seed": 37,
+        "n_players": 10,
+        "group_mode": "synchronized",
+        "training_group_mode": "synchronized",
+        "action_mode": "batch-shifted",
+        "window_mode": "first-death",
+        "checkpoint_sha256": "b" * 64,
+    }
+
+
+def test_result_identity_binds_file_to_arm_seed_action_and_checkpoint(tmp_path: Path) -> None:
+    path = tmp_path / "evaluation" / "seed_37" / "shared" / "batch-shifted.json"
+    auditor = AUDIT.Auditor(tmp_path)
+    auditor._audit_result_identity(
+        check_prefix="event",
+        path=path,
+        payload=_result_identity_payload(),
+        arm="shared",
+        seed=37,
+        action_mode="batch-shifted",
+        window_mode="first-death",
+        checkpoint_hashes={"single": "a" * 64, "shared": "b" * 64},
+    )
+    assert auditor.checks[f"event.{path.relative_to(tmp_path)}.checkpoint_sha256"] == {
+        "expected": "b" * 64,
+        "observed": "b" * 64,
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "incorrect"),
+    [
+        ("seed", 38),
+        ("action_mode", "true"),
+        ("checkpoint_sha256", "c" * 64),
+        ("group_mode", "shuffled"),
+    ],
+)
+def test_result_identity_rejects_mislabeled_or_copied_result(
+    tmp_path: Path,
+    field: str,
+    incorrect: Any,
+) -> None:
+    payload = _result_identity_payload()
+    payload[field] = incorrect
+    path = tmp_path / "evaluation" / "seed_37" / "shared" / "batch-shifted.json"
+
+    with pytest.raises(ValueError, match=field):
+        AUDIT.Auditor(tmp_path)._audit_result_identity(
+            check_prefix="event",
+            path=path,
+            payload=payload,
+            arm="shared",
+            seed=37,
+            action_mode="batch-shifted",
+            window_mode="first-death",
+            checkpoint_hashes={"single": "a" * 64, "shared": "b" * 64},
+        )
 
 
 def test_dataloader_contract_normalizes_legacy_defaults(tmp_path: Path) -> None:
