@@ -171,7 +171,10 @@ class DinoModel(nn.Module):
         x = self.image_normalization(x)
         new_height = self.patch_size * (h // self.patch_size)
         new_width = self.patch_size * (w // self.patch_size)
-        x = torch.nn.functional.interpolate(x, (new_height, new_width), mode="bilinear", antialias=True)
+        if (h, w) != (new_height, new_width):
+            x = torch.nn.functional.interpolate(
+                x, (new_height, new_width), mode="bilinear", antialias=True
+            )
 
         dino_features = self.dino_model.get_intermediate_layers(x, n=self.layers, norm=True, reshape=True)  # type: ignore
         dino_features = [
