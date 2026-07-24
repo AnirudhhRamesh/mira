@@ -74,7 +74,15 @@ def _validate_pair(
     arm_a_training_group_mode: str | None,
     arm_b_training_group_mode: str | None,
 ) -> None:
-    for field in ("split", "seed", "deterministic", "map_slug", "dino_model", "action_mode"):
+    for field in (
+        "split",
+        "seed",
+        "deterministic",
+        "map_slug",
+        "dino_model",
+        "action_mode",
+        "window_mode",
+    ):
         if arm_a.get(field) != arm_b.get(field):
             raise ValueError(
                 f"{source}: paired field {field!r} differs: "
@@ -196,6 +204,7 @@ def summarize(
             "split": first_arm_a["split"],
             "map_slug": first_arm_a["map_slug"],
             "dino_model": first_arm_a["dino_model"],
+            "window_mode": first_arm_a["window_mode"],
             "deterministic": first_arm_a["deterministic"],
             "seeds": seeds,
             "validation_raw_pov_rows_per_seed": first_arm_a["validation"]["total_raw_pov_rows"],

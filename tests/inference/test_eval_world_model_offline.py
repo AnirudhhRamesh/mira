@@ -104,6 +104,14 @@ def test_exact_num_batches_rejects_ambiguous_counts(n_samples: int, batch_size: 
         EVAL._exact_num_batches("samples", n_samples, batch_size)
 
 
+def test_window_mode_cli_is_preregistered(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        ["eval_world_model_offline.py", "checkpoint.pth", "--window-mode", "first-death"],
+    )
+    assert EVAL.parse_args().window_mode == "first-death"
+
+
 def test_action_modes_are_deterministic_and_do_not_mutate_input() -> None:
     batch = make_batch(batch_size=2, n_frames=4, n_actions=4)
     batch.actions.key_presses[0].fill_(1)

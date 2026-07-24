@@ -42,6 +42,7 @@ def _validate_mode_pair(true: dict[str, Any], ablated: dict[str, Any], source: P
         "group_mode",
         "training_group_mode",
         "n_players",
+        "window_mode",
     ):
         if true.get(field) != ablated.get(field):
             raise ValueError(
@@ -57,7 +58,7 @@ def _validate_mode_pair(true: dict[str, Any], ablated: dict[str, Any], source: P
 
 
 def _validate_arm_pair(single: dict[str, Any], shared: dict[str, Any], source: Path) -> None:
-    for field in ("split", "seed", "deterministic", "map_slug", "action_mode"):
+    for field in ("split", "seed", "deterministic", "map_slug", "action_mode", "window_mode"):
         if single.get(field) != shared.get(field):
             raise ValueError(
                 f"{source}: paired field {field!r} differs: "
@@ -155,6 +156,7 @@ def summarize(root: Path) -> dict[str, Any]:
             "deterministic": first["deterministic"],
             "seeds": seeds,
             "action_modes": list(ACTION_MODES),
+            "window_mode": first["window_mode"],
             "validation_raw_pov_rows_per_arm_per_seed": first["validation"]["total_raw_pov_rows"],
             "single_checkpoint_sha256": payloads["single"]["true"][0]["checkpoint_sha256"],
             "shared_checkpoint_sha256": payloads["shared"]["true"][0]["checkpoint_sha256"],

@@ -105,6 +105,14 @@ uses the correctly aligned actions. Zero actions are an out-of-distribution diag
 primary comparison. This diagnostic does not replace event-level evaluation and must not be
 described as proof of causal event fidelity.
 
+As a preregistered event-focused secondary diagnostic, repeat that exact intervention on two-second
+windows centered at the first in-range `player_death` event in each held-out round. All 52 Dust2
+test rounds are eligible. The source-frame start is `death_frame - required_source_frames / 2`,
+clamped only at round boundaries, and is identical for all ten POVs and both model arms. Evaluate
+all 520 raw POV rows with seeds 37 through 41. This tests whether aligned actions become more
+important in immediate combat/death context; it remains a held-out diffusion-loss diagnostic and
+must not be reported as generated death-classification accuracy.
+
 ## Reporting and interpretation
 
 - Preserve individual seed JSON files; never report only the best seed.
@@ -124,10 +132,12 @@ described as proof of causal event fidelity.
 - G7e pilot: `scripts/run_cs2_rebuttal_pipeline.sh`
 - Paired pilot evaluation: `scripts/run_cs2_rebuttal_eval.sh`
 - Action loss diagnostic: `scripts/run_cs2_action_loss_ablation.sh`
+- First-death-centered action diagnostic: `scripts/run_cs2_death_action_ablation.sh`
 - GH200 matched control: `scripts/run_cs2_gh200_sync_control.sh`
 - GH200 held-out evaluation: `scripts/run_cs2_gh200_sync_control_eval.sh`
 - Completed pilot audit: `scripts/audit_cs2_rebuttal_run.py`
 - Unattended audit guard: `scripts/watch_cs2_rebuttal_audit.sh`
+- Unattended event-diagnostic guard: `scripts/watch_cs2_death_action_ablation.sh`
 
 Every launcher records the code commit/status/patch, resolved Hydra configuration, dataset
 selection, checkpoint hashes, environment lock hashes, installed packages, GPU details, and local
@@ -136,7 +146,8 @@ JSONL metrics needed to audit the result without W&B.
 The completed-pilot auditor fails closed unless the pinned Dust2 selection and split counts,
 match-disjointness, clean source provenance, exact timed stage sequence, equal 160-frame and
 ten-action-stream optimizer steps, final time-limit checkpoints, full 520-POV test cardinality,
-fixed seed sets, checkpoint hashes, evaluator provenance, and both automatic evaluation watchers
-all verify. The pilot run additionally records five-second `nvidia-smi` telemetry for peak-memory
+fixed seed sets, checkpoint hashes, evaluator provenance, and all three automatic evaluation
+watchers verify. The pilot run additionally records
+five-second `nvidia-smi` telemetry for peak-memory
 disclosure; because telemetry was enabled after the first single-arm checkpoint, single-arm peak
 memory from that trace is explicitly labeled as partial, while the shared arm is fully covered.

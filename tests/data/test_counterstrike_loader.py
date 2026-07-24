@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +13,7 @@ from mira.data.training_loader import create_loader
 def _fixture(root: Path) -> Path:
     (root / "videos" / "360p").mkdir(parents=True)
     (root / "actions").mkdir()
+    (root / "events").mkdir()
     manifest = []
     for round_idx in range(12):
         match_id = f"{round_idx:012d}"
@@ -38,17 +40,21 @@ def _fixture(root: Path) -> Path:
             actions["buttons"][::4] = 1 << 0
             actions["buttons"][1::4] = 1 << 1
             actions.tofile(root / "actions" / f"{sample_key}.actions.bin")
+            (root / "events" / f"{sample_key}.events.json").write_text(
+                json.dumps({"events": [{"type": "player_death", "frame_idx": 10}]})
+            )
     pq.write_table(pa.Table.from_pylist(manifest), root / "manifest_dust2.parquet")
     return root
 
 
-def _loader(root: Path, *, mode: str, n_players: int):
+def _loader(root: Path, *, mode: str, n_players: int, window_mode: str = "midpoint"):
     return create_loader(
         root,
         dataset_backend="counterstrike1k",
         split="train",
         map_slug="dust2",
         group_mode=mode,
+        window_mode=window_mode,
         clip_len=2,
         target_fps=8,
         n_players=n_players,
@@ -94,3 +100,22 @@ def test_synchronized_and_shuffled_controls(tmp_path, monkeypatch) -> None:
     assert len({meta.source_start_frame for meta in synced_meta}) == 1
     assert len({meta.round_id for meta in shuffled_meta}) == 10
     assert len({meta.match_id for meta in shuffled_meta}) == 10
+
+
+def test_first_death_windows_are_centered_and_paired_across_arms(tmp_path, monkeypatch) -> None:
+    root = _fixture(tmp_path)
+    monkeypatch.setattr(
+        "mira.data.counterstrike.decode_frames",
+        lambda _path, indices, frame_size: torch.zeros(len(indices), 3, *frame_size, dtype=torch.uint8),
+    )
+
+    _single, single_meta = next(iter(_loader(root, mode="single", n_players=1, window_mode="first-death")))
+    _shared, shared_meta = next(
+        iter(_loader(root, mode="synchronized", n_players=10, window_mode="first-death"))
+    )
+
+    # Two target frames at 8 fps require eight source frames; frame 10 is centered at start 6.
+    assert single_meta[0].source_start_frame == 6
+    assert {meta.source_start_frame for meta in shared_meta} == {6}
+    assert single_meta[0].round_id == shared_meta[0].round_id
+    assert {meta.window_mode for meta in shared_meta} == {"first-death"}

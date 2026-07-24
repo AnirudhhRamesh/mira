@@ -251,6 +251,7 @@ def _build_loader(
     clip_len: int,
     batch_size: int,
     seed: int,
+    window_mode: str = "midpoint",
 ):
     """Build a held-out eval loader from the checkpoint's dataset config (fixed seed, no replays)."""
     from mira.data.training_loader import create_loader  # noqa: PLC0415
@@ -262,6 +263,7 @@ def _build_loader(
         split=split,
         map_slug=cfg.dataset.get("map_slug"),
         group_mode=group_mode or cfg.dataset.get("group_mode"),
+        window_mode=window_mode,
         clip_len=clip_len,
         target_fps=model.config.video.fps,
         action_fps=model.config.actions.target_fps,
@@ -311,6 +313,12 @@ def parse_args() -> argparse.Namespace:
         choices=["single", "synchronized", "shuffled"],
         default=None,
         help="Override eval grouping (e.g. evaluate a shuffled-trained model on synchronized POVs).",
+    )
+    parser.add_argument(
+        "--window-mode",
+        choices=["midpoint", "first-death"],
+        default="midpoint",
+        help="CounterStrike-1K held-out window selection; event modes keep all ten POVs synchronized.",
     )
     parser.add_argument(
         "--action-mode",
@@ -447,6 +455,7 @@ def main() -> None:
             clip_len=model.config.video.timesteps,
             batch_size=batch_size,
             seed=args.seed,
+            window_mode=args.window_mode,
         )
         results |= {
             f"{eval_split}/{k}": v
@@ -476,6 +485,7 @@ def main() -> None:
             clip_len=model.config.n_context_frames + eval_config.num_unrolled_frames * stride,
             batch_size=eval_config.per_device_batch_size,
             seed=args.seed + 1,
+            window_mode=args.window_mode,
         )
         results |= {
             f"metrics/{k}": v
@@ -501,6 +511,7 @@ def main() -> None:
                 clip_len=model.config.n_context_frames + SPEED_BENCH_FRAMES * model.temporal_downsampling,
                 batch_size=eval_config.per_device_batch_size,
                 seed=args.seed + 2,
+                window_mode=args.window_mode,
             )
             batch, _ = next(_action_mode_iter(iter(speed_batch), args.action_mode))
             batch = batch.to(device)
@@ -530,6 +541,7 @@ def main() -> None:
             "group_mode": eval_group_mode,
             "training_group_mode": cfg.dataset.get("group_mode"),
             "action_mode": args.action_mode,
+            "window_mode": args.window_mode,
             "n_players": n_players,
             "dino_model": eval_config.dino_model,
             "world_model_metrics": eval_config.model_dump(),

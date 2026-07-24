@@ -8,17 +8,17 @@ python_bin=${3:?}
 training_commit=${4:?}
 evaluator_commit=${5:?}
 status_file=$run_root/final_audit_status.tsv
-action_watcher_pid=$(cat "$run_root/action_ablation_watcher.pid")
+death_watcher_pid=$(cat "$run_root/death_action_ablation_watcher.pid")
 
-printf '%s\twatching\taction_watcher_pid=%s\n' \
-  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$action_watcher_pid" >>"$status_file"
-while kill -0 "$action_watcher_pid" 2>/dev/null; do
+printf '%s\twatching\tdeath_watcher_pid=%s\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$death_watcher_pid" >>"$status_file"
+while kill -0 "$death_watcher_pid" 2>/dev/null; do
   sleep 60
 done
 
-if ! tail -n 1 "$run_root/action_ablation_status.tsv" |
-  grep -q $'\taction_evaluation\tcomplete$'; then
-  printf '%s\tblocked\taction_evaluation_incomplete\n' \
+if ! tail -n 1 "$run_root/death_action_ablation_status.tsv" |
+  grep -q $'\tdeath_action_evaluation\tcomplete$'; then
+  printf '%s\tblocked\tdeath_action_evaluation_incomplete\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status_file"
   exit 1
 fi

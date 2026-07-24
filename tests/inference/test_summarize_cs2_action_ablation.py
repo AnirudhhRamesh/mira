@@ -33,6 +33,7 @@ def _payload(arm: str, mode: str, seed: int, loss: float) -> dict:
         "training_group_mode": "synchronized" if is_shared else "single",
         "n_players": 10 if is_shared else 1,
         "action_mode": mode,
+        "window_mode": "midpoint",
         "validation": {"total_raw_pov_rows": 520},
         "results": {"test/loss_total": loss},
     }
@@ -56,6 +57,7 @@ def test_summarize_action_ablation_reports_paired_degradation(tmp_path) -> None:
     degradation = result["arms"]["shared"]["test/loss_total"]["time-shifted"]["paired_degradation_vs_true"]
     assert degradation["mean"] == pytest.approx(0.3)
     assert result["contract"]["seeds"] == [37, 38]
+    assert result["contract"]["window_mode"] == "midpoint"
 
 
 def test_summarize_action_ablation_rejects_checkpoint_drift(tmp_path) -> None:

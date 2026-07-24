@@ -413,6 +413,7 @@ class Auditor:
             "split": "test",
             "map_slug": "dust2",
             "dino_model": "dinov2_vitb14",
+            "window_mode": "midpoint",
             "deterministic": True,
             "seeds": EXPECTED_PRIMARY_SEEDS,
             "validation_raw_pov_rows_per_seed": 520,
@@ -444,8 +445,15 @@ class Auditor:
             )
         return {"evaluator_commit": evaluator_commit, "summary": str(root / "summary.json")}
 
-    def audit_action_evaluation(self, checkpoint_hashes: dict[str, str]) -> dict[str, Any]:
-        root = self.root / "evaluation" / "action_loss_seed_sweep"
+    def audit_action_evaluation(
+        self,
+        checkpoint_hashes: dict[str, str],
+        *,
+        root_name: str = "action_loss_seed_sweep",
+        check_prefix: str = "action_eval",
+        window_mode: str = "midpoint",
+    ) -> dict[str, Any]:
+        root = self.root / "evaluation" / root_name
         evaluator_commit = self._audit_eval_provenance(root)
         summary = _read_json(root / "summary.json")
         contract = summary["contract"]
@@ -455,26 +463,32 @@ class Auditor:
             "deterministic": True,
             "seeds": EXPECTED_ACTION_SEEDS,
             "action_modes": EXPECTED_ACTION_MODES,
+            "window_mode": window_mode,
             "validation_raw_pov_rows_per_arm_per_seed": 520,
             "single_checkpoint_sha256": checkpoint_hashes["single"],
             "shared_checkpoint_sha256": checkpoint_hashes["shared"],
         }
         for key, value in expected.items():
-            self.require(f"action_eval.{key}", contract.get(key) == value, contract.get(key))
+            self.require(f"{check_prefix}.{key}", contract.get(key) == value, contract.get(key))
         result_paths = sorted(root.glob("seed_*/*/*.json"))
-        self.require("action_eval.result_files", len(result_paths) == 40, len(result_paths))
+        self.require(f"{check_prefix}.result_files", len(result_paths) == 40, len(result_paths))
         for path in result_paths:
             payload = _read_json(path)
             _finite_results(payload, path)
             self.require(
-                f"action_eval.{path.parent.parent.name}.{path.parent.name}.{path.stem}.test",
+                f"{check_prefix}.{path.parent.parent.name}.{path.parent.name}.{path.stem}.test",
                 payload["split"] == "test",
                 payload["split"],
             )
             self.require(
-                f"action_eval.{path.parent.parent.name}.{path.parent.name}.{path.stem}.raw_rows",
+                f"{check_prefix}.{path.parent.parent.name}.{path.parent.name}.{path.stem}.raw_rows",
                 payload["validation"]["total_raw_pov_rows"] == 520,
                 payload["validation"]["total_raw_pov_rows"],
+            )
+            self.require(
+                f"{check_prefix}.{path.parent.parent.name}.{path.parent.name}.{path.stem}.window_mode",
+                payload["window_mode"] == window_mode,
+                payload["window_mode"],
             )
         return {"evaluator_commit": evaluator_commit, "summary": str(root / "summary.json")}
 
@@ -482,6 +496,7 @@ class Auditor:
         expected = {
             "post_pipeline_status.tsv": ("evaluation", "complete"),
             "action_ablation_status.tsv": ("action_evaluation", "complete"),
+            "death_action_ablation_status.tsv": ("death_action_evaluation", "complete"),
         }
         for filename, terminal in expected.items():
             lines = (self.root / filename).read_text().splitlines()
@@ -504,11 +519,21 @@ class Auditor:
         }
         primary = self.audit_primary_evaluation(checkpoint_hashes)
         action = self.audit_action_evaluation(checkpoint_hashes)
+        death_action = self.audit_action_evaluation(
+            checkpoint_hashes,
+            root_name="death_action_loss_seed_sweep",
+            check_prefix="death_action_eval",
+            window_mode="first-death",
+        )
         self.audit_watcher_status()
         self.require(
             "evaluation.same_commit",
-            primary["evaluator_commit"] == action["evaluator_commit"],
-            {"primary": primary["evaluator_commit"], "action": action["evaluator_commit"]},
+            primary["evaluator_commit"] == action["evaluator_commit"] == death_action["evaluator_commit"],
+            {
+                "primary": primary["evaluator_commit"],
+                "action": action["evaluator_commit"],
+                "death_action": death_action["evaluator_commit"],
+            },
         )
         return {
             "status": "pass",
@@ -520,6 +545,7 @@ class Auditor:
             "gpu_telemetry": telemetry,
             "primary_evaluation": primary,
             "action_evaluation": action,
+            "death_action_evaluation": death_action,
             "checks": self.checks,
         }
 

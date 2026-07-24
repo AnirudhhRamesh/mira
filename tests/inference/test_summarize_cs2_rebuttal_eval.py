@@ -33,6 +33,7 @@ def _payload(arm: str, seed: int, metric: float) -> dict:
         "map_slug": "dust2",
         "dino_model": "dinov2_vitb14",
         "action_mode": "true",
+        "window_mode": "midpoint",
         "group_mode": "synchronized" if is_shared else "single",
         "n_players": n_players,
         "validation": {"total_raw_pov_rows": 520},

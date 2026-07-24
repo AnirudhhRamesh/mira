@@ -29,7 +29,12 @@ from mira.world_model.actions_config import ActionConfig, ActionTensors, stack_a
 
 from .actions import DEFAULT_RL_KEYS, KeyVocab
 from .batch import VideoActionBatch
-from .counterstrike import CS2_KEYS, CS2_SOURCE_FPS, CounterStrike1KIterable
+from .counterstrike import (
+    CS2_KEYS,
+    CS2_SOURCE_FPS,
+    CounterStrike1KIterable,
+    CounterStrikeWindowMode,
+)
 from .dataset import RocketScienceDataset
 
 
@@ -233,6 +238,7 @@ def create_loader(
     split: str = "train",
     map_slug: str | None = None,
     group_mode: Literal["single", "synchronized", "shuffled"] | None = None,
+    window_mode: CounterStrikeWindowMode = "midpoint",
     clip_len: int = 16,
     target_fps: int = 10,
     n_players: int = 1,
@@ -259,6 +265,8 @@ def create_loader(
 
     Args:
         index_path: Path to a dataset directory or its ``index.json``.
+        window_mode: CounterStrike-1K window selection. ``midpoint`` is the fixed held-out default;
+            ``first-death`` centers each eligible synchronized round on its first death event.
         clip_len: Number of time steps per clip.
         target_fps: Frame rate the clips (and actions) are downsampled to.
         n_players: Perspectives grouped contiguously per row-block. ``1`` treats every perspective
@@ -309,6 +317,7 @@ def create_loader(
             split=split,
             map_slug=map_slug,
             group_mode=group_mode or ("single" if n_players == 1 else "synchronized"),
+            window_mode=window_mode,
             clip_len=clip_len,
             target_fps=target_fps,
             n_players=n_players,
@@ -328,6 +337,8 @@ def create_loader(
         )
     if dataset_backend != "rocket_science":
         raise ValueError(f"Unknown dataset_backend={dataset_backend!r}")
+    if window_mode != "midpoint":
+        raise ValueError("window_mode is supported only by dataset_backend='counterstrike1k'")
 
     # Fail loudly up front if no clip in the dataset can satisfy `clip_len`: otherwise every match is
     # skipped as "too long for its chunks" and, with `infinite=True`, the stream loops over an empty

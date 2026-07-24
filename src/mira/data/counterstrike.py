@@ -22,6 +22,7 @@ the signs and degree units in the released action stream preserved.
 
 from __future__ import annotations
 
+import json
 import random
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -61,6 +62,7 @@ CS2_ACTION_DTYPE = np.dtype(
     ]
 )
 GroupMode = Literal["single", "synchronized", "shuffled"]
+CounterStrikeWindowMode = Literal["midpoint", "first-death"]
 
 
 @dataclass(frozen=True)
@@ -87,6 +89,7 @@ class CounterStrikeClipMeta:
     sample_key: str
     source_start_frame: int
     group_mode: str
+    window_mode: str
 
 
 def _rank_and_world_size() -> tuple[int, int]:
@@ -199,6 +202,7 @@ class CounterStrike1KIterable(IterableDataset):
         split: str,
         map_slug: str | None,
         group_mode: GroupMode,
+        window_mode: CounterStrikeWindowMode,
         clip_len: int,
         target_fps: int,
         n_players: int,
@@ -231,9 +235,14 @@ class CounterStrike1KIterable(IterableDataset):
         self.root, self.rounds = _read_rounds(index_path, split=split, map_slug=map_slug)
         if group_mode == "shuffled" and len(self.rounds) < n_players:
             raise ValueError(f"Shuffled control needs at least {n_players} rounds, found {len(self.rounds)}")
+        if window_mode != "midpoint" and shuffle:
+            raise ValueError("Event-centered CounterStrike-1K windows require shuffle=False")
+        if window_mode != "midpoint" and group_mode == "shuffled":
+            raise ValueError("Event-centered windows are defined only for real synchronized rounds")
 
         self.action_config = action_config
         self.group_mode = group_mode
+        self.window_mode = window_mode
         self.clip_len = clip_len
         self.target_fps = target_fps
         self.source_stride = CS2_SOURCE_FPS // target_fps
@@ -266,6 +275,27 @@ class CounterStrike1KIterable(IterableDataset):
         # A fixed midpoint makes validation repeatable even though its iterator is infinite.
         return rng.randint(0, max_start) if self.shuffle else max_start // 2
 
+    def _event_start(self, rows: list[_ManifestRow], max_frames: int) -> int | None:
+        """Center a synchronized source window on the first preregistered round event."""
+        if self.window_mode != "first-death":
+            raise ValueError(f"Unsupported CounterStrike-1K window_mode={self.window_mode!r}")
+        events_path = self.root / "events" / f"{rows[0].sample_key}.events.json"
+        if not events_path.is_file():
+            raise FileNotFoundError(f"Missing CounterStrike-1K events: {events_path}")
+        raw = json.loads(events_path.read_text())
+        events = raw.get("events", []) if isinstance(raw, dict) else raw
+        anchors = sorted(
+            int(event["frame_idx"])
+            for event in events
+            if event.get("type") == "player_death"
+            and "frame_idx" in event
+            and 0 <= int(event["frame_idx"]) < max_frames
+        )
+        if not anchors:
+            return None
+        max_start = max_frames - self.required_source_frames
+        return min(max(anchors[0] - self.required_source_frames // 2, 0), max_start)
+
     def _plans_for_round(
         self,
         round_idx: int,
@@ -278,6 +308,13 @@ class CounterStrike1KIterable(IterableDataset):
             common_frames = min(row.frames for row in rows)
             if common_frames < self.required_source_frames:
                 return
+            if self.window_mode != "midpoint":
+                start = self._event_start(rows, common_frames)
+                if start is None:
+                    return
+                for row in rows:
+                    yield [(row, start)]
+                return
             for row in rows:
                 yield [(row, self._start(common_frames, rng))]
             return
@@ -286,7 +323,13 @@ class CounterStrike1KIterable(IterableDataset):
             common_frames = min(row.frames for row in rows)
             if common_frames < self.required_source_frames:
                 return
-            shared_start = self._start(common_frames, rng)
+            shared_start = (
+                self._start(common_frames, rng)
+                if self.window_mode == "midpoint"
+                else self._event_start(rows, common_frames)
+            )
+            if shared_start is None:
+                return
             yield [(row, shared_start) for row in rows]
             return
 
@@ -360,6 +403,7 @@ class CounterStrike1KIterable(IterableDataset):
                 sample_key=row.sample_key,
                 source_start_frame=start,
                 group_mode=self.group_mode,
+                window_mode=self.window_mode,
             ),
         }
 
