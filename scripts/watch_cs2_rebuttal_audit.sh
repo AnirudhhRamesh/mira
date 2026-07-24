@@ -39,6 +39,7 @@ fi
 printf '%s\taudit\trunning\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status_file"
 cd "$project_dir"
 export PYTHONPATH="$project_dir/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONDONTWRITEBYTECODE=1
 
 set +e
 "$python_bin" scripts/audit_cs2_rebuttal_run.py "$run_root" \

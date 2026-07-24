@@ -15,6 +15,7 @@ action_modes=${CS1K_ACTION_MODES:-"true batch-shifted time-shifted zero"}
 
 cd "$project_dir"
 export PYTHONPATH="$project_dir/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONDONTWRITEBYTECODE=1
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export WANDB_MODE=disabled
 

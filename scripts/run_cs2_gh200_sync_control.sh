@@ -27,6 +27,7 @@ torchrun_bin=${TORCHRUN_BIN:-$(dirname "$python_bin")/torchrun}
 
 cd "$project_dir"
 export PYTHONPATH="$project_dir/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONDONTWRITEBYTECODE=1
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 export NCCL_DEBUG=${NCCL_DEBUG:-INFO}

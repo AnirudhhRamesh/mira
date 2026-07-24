@@ -16,6 +16,7 @@ test_rounds=${CS1K_TEST_ROUNDS:-52}
 
 cd "$project_dir"
 export PYTHONPATH="$project_dir/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONDONTWRITEBYTECODE=1
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export WANDB_MODE=disabled
 
