@@ -178,8 +178,8 @@ def _action_table(summary: dict[str, Any], label: str) -> list[str]:
     return lines
 
 
-def render_report(run_root: Path) -> str:
-    inputs = {"audit": run_root / "audit.json"}
+def render_report(run_root: Path, *, audit_path: Path | None = None) -> str:
+    inputs = {"audit": audit_path or run_root / "audit.json"}
     inputs.update({name: run_root / relative for name, relative in SUMMARY_PATHS.items()})
     payloads = {name: _read_json(path) for name, path in inputs.items()}
     audit = payloads["audit"]
@@ -286,6 +286,11 @@ def render_report(run_root: Path) -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_root", type=Path)
+    parser.add_argument(
+        "--audit",
+        type=Path,
+        help="Strict audit JSON to bind into the report (default: <run_root>/audit.json).",
+    )
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
@@ -293,7 +298,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     output = args.output or args.run_root / "rebuttal_report.md"
-    report = render_report(args.run_root.resolve())
+    report = render_report(
+        args.run_root.resolve(),
+        audit_path=args.audit.resolve() if args.audit else None,
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
     temporary.write_text(report, encoding="utf-8")

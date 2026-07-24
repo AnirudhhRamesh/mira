@@ -15,6 +15,8 @@ Hydra applications for training, evaluation, and serving. Each reads its config 
   Dust2 run audit passes and all summaries match the audited checkpoint and seed contracts.
 - `validate_cs2_loader_selection.py` — freeze a GH200 loader configuration only from at least three
   clean-source, transfer-inclusive, exact-contract synchronized/shuffled benchmark repeats.
+- `watch_cs2_strict_audit_report.sh` — after the pinned pilot audit passes, run the stronger
+  versioned identity audit and render a hash-bound Markdown report without manual intervention.
 
 See [`configs/README.md`](../configs/README.md) for the config layout and the top-level
 [`README.md`](../README.md) for example commands.

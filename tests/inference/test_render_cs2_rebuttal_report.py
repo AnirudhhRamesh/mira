@@ -137,3 +137,17 @@ def test_report_rejects_checkpoint_identity_drift(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="audited shared checkpoint"):
         REPORT.render_report(tmp_path)
+
+
+def test_report_can_bind_an_explicit_strict_audit(tmp_path: Path) -> None:
+    _run_fixture(tmp_path)
+    strict_path = tmp_path / "audit_strict.json"
+    strict = json.loads((tmp_path / "audit.json").read_text())
+    strict["evaluator_commit"] = "strictly-checked-evaluator"
+    _write(strict_path, strict)
+    (tmp_path / "audit.json").unlink()
+
+    report = REPORT.render_report(tmp_path, audit_path=strict_path)
+
+    assert "strictly-checked-evaluator" in report
+    assert REPORT._sha256(strict_path) in report
