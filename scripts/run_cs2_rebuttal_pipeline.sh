@@ -14,6 +14,7 @@ python_bin=${MIRA_PYTHON:-$project_dir/.pixi/envs/default/bin/python}
 
 mkdir -p "$run_root"
 cd "$project_dir"
+export PYTHONPATH="$project_dir/src${PYTHONPATH:+:$PYTHONPATH}"
 export WANDB_MODE=disabled
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 
