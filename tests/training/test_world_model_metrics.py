@@ -14,6 +14,7 @@ from mira.training.metrics.frechet import SlicedFrechetMetric
 from mira.training.metrics.image_metrics import DinoForMetrics, OnlineGaussian
 from mira.training.metrics.world_model_metrics import (
     WorldModelMetricsConfig,
+    _generated_video_at_latent_rate,
     build_frechet_curve_plots,
 )
 
@@ -61,6 +62,14 @@ def test_world_model_metrics_config_defaults() -> None:
     # The inference rollout config defaults are carried through.
     assert config.inference.n_diffusion_steps == 10
     assert config.inference.schedule_type == "linear_quadratic"
+
+
+def test_generated_reconstruction_region_is_aligned_at_latent_rate() -> None:
+    video = torch.arange(10).reshape(1, 10, 1, 1, 1)
+
+    generated = _generated_video_at_latent_rate(video, n_context_frames=4, temporal_stride=2)
+
+    assert generated.flatten().tolist() == [4, 6, 8]
 
 
 def test_dino_metrics_public_v2_loading(monkeypatch) -> None:

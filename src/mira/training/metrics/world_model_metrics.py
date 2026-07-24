@@ -40,6 +40,18 @@ def _autocast(device: torch.device | int | str):
     return contextlib.nullcontext()
 
 
+def _generated_video_at_latent_rate(
+    video: torch.Tensor, *, n_context_frames: int, temporal_stride: int
+) -> torch.Tensor:
+    """Subsample video-rate frames, then return the generated region in latent-rate units."""
+    if n_context_frames % temporal_stride:
+        raise ValueError(
+            f"n_context_frames={n_context_frames} must be divisible by temporal_stride={temporal_stride}"
+        )
+    n_context_latents = n_context_frames // temporal_stride
+    return video[:, ::temporal_stride][:, n_context_latents:]
+
+
 class WorldModelMetricsConfig(BaseModel):
     """Configuration for :class:`WorldModelMetrics` and the offline eval entry point.
 
@@ -243,8 +255,16 @@ class WorldModelMetrics:
         # decode_to_video, which would also unnormalize). Same [-1, 1] -> [0, 1] post-processing.
         with torch.no_grad(), _autocast(device):
             recon_video = (model.codec.decode(z_for_target) * 0.5 + 0.5).float()
+        # Predictions/targets above were reduced to latent rate. Apply the same stride before
+        # selecting the generated reconstruction region; slicing video-rate reconstructions at
+        # n_context_frames without subsampling would silently compare different timestamps.
+        recon_video = _generated_video_at_latent_rate(
+            recon_video,
+            n_context_frames=model.config.n_context_frames,
+            temporal_stride=stride,
+        )
         recon_dino_features = self.dino.dino_forward(
-            recon_video[:, model.config.n_context_frames :],
+            recon_video,
             max_chunk_size=self.config.dino_max_chunk_size,
         )
         for s in range(self.num_slices):
