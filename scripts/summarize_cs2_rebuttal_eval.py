@@ -74,7 +74,7 @@ def _validate_pair(
     arm_a_training_group_mode: str | None,
     arm_b_training_group_mode: str | None,
 ) -> None:
-    for field in ("split", "seed", "deterministic", "map_slug", "dino_model"):
+    for field in ("split", "seed", "deterministic", "map_slug", "dino_model", "action_mode"):
         if arm_a.get(field) != arm_b.get(field):
             raise ValueError(
                 f"{source}: paired field {field!r} differs: "

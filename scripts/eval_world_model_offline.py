@@ -29,7 +29,7 @@ from collections import defaultdict
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 # This must be set before importing Torch for strict deterministic CUDA matmul.
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
@@ -52,6 +52,7 @@ logger = logging.getLogger(__name__)
 CONFIG_FILENAME = "world_model_config.yaml"
 EVAL_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "eval_world_model.yaml"
 SPEED_BENCH_FRAMES = 32
+ActionMode = Literal["true", "zero", "batch-shifted", "time-shifted"]
 
 
 def _autocast(device: torch.device | int | str):
@@ -212,6 +213,35 @@ def _frame_size(cfg) -> tuple[int, int] | None:
     return tuple(fs) if fs is not None else None  # type: ignore[return-value]
 
 
+def _apply_action_mode(batch: VideoActionBatch, mode: ActionMode) -> VideoActionBatch:
+    """Return a batch with a deterministic action intervention and unchanged video."""
+    if mode == "true":
+        return batch
+
+    actions = batch.actions.clone()
+    if mode == "zero":
+        actions.key_presses.zero_()
+        actions.mouse_movements.zero_()
+    elif mode == "batch-shifted":
+        if len(batch) < 2:
+            raise ValueError("batch-shifted actions require at least two raw POV rows per batch")
+        actions.key_presses = actions.key_presses.roll(shifts=1, dims=0)
+        actions.mouse_movements = actions.mouse_movements.roll(shifts=1, dims=0)
+        actions.game_mouse_sensitivity = actions.game_mouse_sensitivity.roll(shifts=1, dims=0)
+    elif mode == "time-shifted":
+        shift = max(1, actions.n_steps // 2)
+        actions.key_presses = actions.key_presses.roll(shifts=shift, dims=1)
+        actions.mouse_movements = actions.mouse_movements.roll(shifts=shift, dims=1)
+    else:
+        raise ValueError(f"Unsupported action mode {mode!r}")
+    return VideoActionBatch(video=batch.video, actions=actions)
+
+
+def _action_mode_iter(loader, mode: ActionMode):
+    for batch, metadata in loader:
+        yield _apply_action_mode(batch, mode), metadata
+
+
 def _build_loader(
     cfg,
     model: "LatentWorldModel",
@@ -281,6 +311,12 @@ def parse_args() -> argparse.Namespace:
         choices=["single", "synchronized", "shuffled"],
         default=None,
         help="Override eval grouping (e.g. evaluate a shuffled-trained model on synchronized POVs).",
+    )
+    parser.add_argument(
+        "--action-mode",
+        choices=["true", "zero", "batch-shifted", "time-shifted"],
+        default="true",
+        help="Deterministic action intervention; videos and rollout RNG stay fixed.",
     )
     parser.add_argument("--seed", type=int, default=37, help="Base deterministic eval seed.")
     parser.add_argument(
@@ -415,7 +451,10 @@ def main() -> None:
         results |= {
             f"{eval_split}/{k}": v
             for k, v in run_validation_loss(
-                model, iter(val_loader), device, n_batches=val_num_batches
+                model,
+                _action_mode_iter(iter(val_loader), args.action_mode),
+                device,
+                n_batches=val_num_batches,
             ).items()
         }
 
@@ -442,7 +481,7 @@ def main() -> None:
             f"metrics/{k}": v
             for k, v in run_world_model_metrics(
                 model,
-                iter(metrics_loader),
+                _action_mode_iter(iter(metrics_loader), args.action_mode),
                 device,
                 wm_metrics_config=eval_config,
                 num_eval_batches=metric_num_batches,
@@ -463,7 +502,7 @@ def main() -> None:
                 batch_size=eval_config.per_device_batch_size,
                 seed=args.seed + 2,
             )
-            batch, _ = next(iter(speed_batch))
+            batch, _ = next(_action_mode_iter(iter(speed_batch), args.action_mode))
             batch = batch.to(device)
             speed_results = measure_denoise_speed(model, batch, eval_config.inference)
             speed_results["denoise_raw_pov_rows"] = float(len(batch))
@@ -490,6 +529,7 @@ def main() -> None:
             "map_slug": cfg.dataset.get("map_slug"),
             "group_mode": eval_group_mode,
             "training_group_mode": cfg.dataset.get("group_mode"),
+            "action_mode": args.action_mode,
             "n_players": n_players,
             "dino_model": eval_config.dino_model,
             "world_model_metrics": eval_config.model_dump(),

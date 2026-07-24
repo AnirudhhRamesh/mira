@@ -104,6 +104,30 @@ def test_exact_num_batches_rejects_ambiguous_counts(n_samples: int, batch_size: 
         EVAL._exact_num_batches("samples", n_samples, batch_size)
 
 
+def test_action_modes_are_deterministic_and_do_not_mutate_input() -> None:
+    batch = make_batch(batch_size=2, n_frames=4, n_actions=4)
+    batch.actions.key_presses[0].fill_(1)
+    batch.actions.key_presses[1].fill_(2)
+    batch.actions.mouse_movements[0, :, 0] = torch.arange(4)
+    batch.actions.mouse_movements[1, :, 0] = 10 + torch.arange(4)
+    original = batch.clone()
+
+    zero = EVAL._apply_action_mode(batch, "zero")
+    batch_shifted = EVAL._apply_action_mode(batch, "batch-shifted")
+    time_shifted = EVAL._apply_action_mode(batch, "time-shifted")
+
+    assert torch.count_nonzero(zero.actions.key_presses) == 0
+    assert torch.count_nonzero(zero.actions.mouse_movements) == 0
+    assert torch.equal(batch_shifted.actions.key_presses[0], original.actions.key_presses[1])
+    assert torch.equal(
+        time_shifted.actions.mouse_movements[0],
+        original.actions.mouse_movements[0].roll(shifts=2, dims=0),
+    )
+    assert torch.equal(batch.video, original.video)
+    assert torch.equal(batch.actions.key_presses, original.actions.key_presses)
+    assert torch.equal(batch.actions.mouse_movements, original.actions.mouse_movements)
+
+
 def test_world_model_metrics_and_viz_offline(monkeypatch, tmp_path) -> None:
     """The eval's metrics loop + viz writer run end-to-end on the stub model (gated on DINO/FID)."""
     pytest.importorskip("pytorch_fid")
