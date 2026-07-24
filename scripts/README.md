@@ -11,6 +11,8 @@ Hydra applications for training, evaluation, and serving. Each reads its config 
 - `bench_wm_speed.py` — micro-benchmark world-model rollout speed.
 - `bench_cs2_dataloader.py` — benchmark the exact Dust2 MIRA input contract across worker settings
   and fail closed unless the fixed first-round single/synchronized video and action tensors match.
+- `render_cs2_rebuttal_report.py` — render deterministic Markdown tables only after the complete
+  Dust2 run audit passes and all summaries match the audited checkpoint and seed contracts.
 
 See [`configs/README.md`](../configs/README.md) for the config layout and the top-level
 [`README.md`](../README.md) for example commands.
