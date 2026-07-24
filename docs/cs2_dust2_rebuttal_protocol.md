@@ -160,11 +160,13 @@ from model quality.
 - Paired pilot evaluation: `scripts/run_cs2_rebuttal_eval.sh`
 - Action loss diagnostic: `scripts/run_cs2_action_loss_ablation.sh`
 - First-death-centered action diagnostic: `scripts/run_cs2_death_action_ablation.sh`
+- Unattended paired-evaluation guard: `scripts/watch_cs2_rebuttal_eval.sh`
+- Unattended midpoint-action guard: `scripts/watch_cs2_action_loss_ablation.sh`
+- Unattended event-diagnostic guard: `scripts/watch_cs2_death_action_ablation.sh`
+- Unattended final certification guard: `scripts/watch_cs2_rebuttal_audit.sh`
 - GH200 matched control: `scripts/run_cs2_gh200_sync_control.sh`
 - GH200 held-out evaluation: `scripts/run_cs2_gh200_sync_control_eval.sh`
 - Completed pilot audit: `scripts/audit_cs2_rebuttal_run.py`
-- Unattended audit guard: `scripts/watch_cs2_rebuttal_audit.sh`
-- Unattended event-diagnostic guard: `scripts/watch_cs2_death_action_ablation.sh`
 
 Every launcher records the code commit/status/patch, resolved Hydra configuration, dataset
 selection, checkpoint hashes, environment lock hashes, installed packages, GPU details, and local
