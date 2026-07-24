@@ -152,9 +152,16 @@ pixel-identical. The selected loader settings are frozen identically for all con
 training seeds, preserved in resolved configs and node launcher provenance, and audited separately
 from model quality.
 
+For an isolated benchmark node that does not hold the full training materialization,
+`scripts/stage_cs2_loader_benchmark_val.sh` downloads the three validation matches from the pinned
+Hugging Face dataset revision, verifies the manifest and six shard SHA-256 digests, extracts only
+the `val`/Dust2 payloads, and writes the exact selection/download provenance. This avoids reading
+or copying from a live training volume.
+
 ## Reproduction entry points
 
 - Data selection/materialization: `scripts/prepare_counterstrike1k.py`
+- Isolated loader-benchmark staging: `scripts/stage_cs2_loader_benchmark_val.sh`
 - Exact-contract data-loader benchmark: `scripts/bench_cs2_dataloader.py`
 - G7e pilot: `scripts/run_cs2_rebuttal_pipeline.sh`
 - Paired pilot evaluation: `scripts/run_cs2_rebuttal_eval.sh`

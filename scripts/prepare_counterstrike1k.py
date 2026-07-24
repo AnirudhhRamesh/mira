@@ -142,29 +142,53 @@ def _dataset_statistics(rows: list[dict]) -> dict:
     return {"splits": result, "match_overlap": overlap}
 
 
+def _select_table(table, *, map_slug: str, splits: list[str] | None):
+    """Select and canonically order a map, optionally restricted to named release splits."""
+    mask = pc.equal(  # pyright: ignore[reportAttributeAccessIssue]
+        table["map_slug"], map_slug
+    )
+    normalized_splits = sorted(set(splits or []))
+    if normalized_splits:
+        split_mask = pc.equal(  # pyright: ignore[reportAttributeAccessIssue]
+            table["split"], normalized_splits[0]
+        )
+        for split in normalized_splits[1:]:
+            split_mask = pc.or_(  # pyright: ignore[reportAttributeAccessIssue]
+                split_mask,
+                pc.equal(  # pyright: ignore[reportAttributeAccessIssue]
+                    table["split"], split
+                ),
+            )
+        mask = pc.and_(mask, split_mask)  # pyright: ignore[reportAttributeAccessIssue]
+    selected = table.filter(mask)
+    return selected.take(
+        pc.sort_indices(  # pyright: ignore[reportAttributeAccessIssue]
+            selected, sort_keys=[("sample_key", "ascending")]
+        )
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--map-slug", default="dust2")
+    parser.add_argument(
+        "--splits",
+        nargs="+",
+        help="Optional release splits to materialize (for example: --splits val).",
+    )
     parser.add_argument("--extract", action="store_true")
     parser.add_argument("--provenance-output", type=Path, required=True)
     args = parser.parse_args()
 
     full_manifest = args.data_root / "manifest.parquet"
     table = pq.read_table(full_manifest)
-    subset = table.filter(
-        pc.equal(  # pyright: ignore[reportAttributeAccessIssue]
-            table["map_slug"], args.map_slug
-        )
-    )
-    subset = subset.take(
-        pc.sort_indices(  # pyright: ignore[reportAttributeAccessIssue]
-            subset, sort_keys=[("sample_key", "ascending")]
-        )
-    )
+    subset = _select_table(table, map_slug=args.map_slug, splits=args.splits)
     rows = subset.to_pylist()
     if not rows:
-        raise ValueError(f"No rows with map_slug={args.map_slug!r} in {full_manifest}")
+        raise ValueError(
+            f"No rows with map_slug={args.map_slug!r}, splits={args.splits!r} in {full_manifest}"
+        )
 
     match_ids = sorted({str(row["match_id"]) for row in rows})
     shards = [
@@ -196,6 +220,7 @@ def main() -> None:
     )
     provenance = {
         "map_slug": args.map_slug,
+        "splits_filter": sorted(set(args.splits or [])) or None,
         "full_manifest": str(full_manifest),
         "full_manifest_sha256": _sha256(full_manifest),
         "selection_sha256": hashlib.sha256(canonical_rows.encode()).hexdigest(),
