@@ -14,6 +14,7 @@ from mira.training.metrics.frechet import SlicedFrechetMetric
 from mira.training.metrics.image_metrics import DinoForMetrics, OnlineGaussian
 from mira.training.metrics.world_model_metrics import (
     WorldModelMetricsConfig,
+    _dino_feature_drift,
     _generated_video_at_latent_rate,
     build_frechet_curve_plots,
 )
@@ -70,6 +71,19 @@ def test_generated_reconstruction_region_is_aligned_at_latent_rate() -> None:
     generated = _generated_video_at_latent_rate(video, n_context_frames=4, temporal_stride=2)
 
     assert generated.flatten().tolist() == [4, 6, 8]
+
+
+def test_dino_cosine_drift_uses_embedding_channel_axis() -> None:
+    # Target is a different positive scale at each spatial position, so every C-vector is
+    # collinear (zero channel-wise cosine drift). Treating W as the vector axis, as the old
+    # implementation did, incorrectly produces non-zero drift.
+    predicted = torch.tensor([[[[[1.0, 3.0]], [[2.0, 4.0]]]]])
+    target = torch.tensor([[[[[2.0, 9.0]], [[4.0, 12.0]]]]])
+
+    cosine_drift, l2_drift = _dino_feature_drift(predicted, target)
+
+    assert cosine_drift.item() == pytest.approx(0.0, abs=1e-6)
+    assert l2_drift.item() > 0
 
 
 def test_dino_metrics_public_v2_loading(monkeypatch) -> None:

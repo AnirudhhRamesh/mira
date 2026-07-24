@@ -52,6 +52,19 @@ def _generated_video_at_latent_rate(
     return video[:, ::temporal_stride][:, n_context_latents:]
 
 
+def _dino_feature_drift(predicted: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return per-frame cosine and L2 drift for ``(B,T,C,H,W)`` DINO feature maps."""
+    if predicted.shape != target.shape or predicted.ndim != 5:
+        raise ValueError(
+            f"DINO feature maps must have matching (B,T,C,H,W) shapes, got "
+            f"{tuple(predicted.shape)} and {tuple(target.shape)}"
+        )
+    cosine_distance = 1 - torch.nn.functional.cosine_similarity(predicted, target, dim=2)
+    cosine_drift = cosine_distance.mean(dim=(2, 3))
+    l2_drift = torch.nn.functional.mse_loss(predicted, target, reduction="none").mean(dim=(2, 3, 4))
+    return cosine_drift, l2_drift
+
+
 class WorldModelMetricsConfig(BaseModel):
     """Configuration for :class:`WorldModelMetrics` and the offline eval entry point.
 
@@ -216,18 +229,10 @@ class WorldModelMetrics:
         pred_dino_features = all_dino_features[:batch_size]
         dino_target_features = all_dino_features[batch_size:]
 
-        dino_similarities = torch.nn.functional.cosine_similarity(
-            pred_dino_features, dino_target_features, dim=-1
-        )
-        # Convert cosine similarity to a distance; in practice a value > 1 means worse than chance.
-        dino_cos_drifts = 1 - dino_similarities
-        dino_cos_drift = dino_cos_drifts.mean(dim=(2, 3)).cpu()[:, : self.config.drift_metric_frames]
-
-        # DINO L2 distance (MSE over feature dim, averaged over spatial/temporal).
-        dino_l2_drifts = torch.nn.functional.mse_loss(
-            pred_dino_features, dino_target_features, reduction="none"
-        ).mean(dim=-1)
-        dino_l2_drift = dino_l2_drifts.mean(dim=(2, 3)).cpu()[:, : self.config.drift_metric_frames]
+        dino_cos_drift, dino_l2_drift = _dino_feature_drift(pred_dino_features, dino_target_features)
+        # In practice a cosine distance > 1 means worse than chance.
+        dino_cos_drift = dino_cos_drift.cpu()[:, : self.config.drift_metric_frames]
+        dino_l2_drift = dino_l2_drift.cpu()[:, : self.config.drift_metric_frames]
 
         latent_similarities = torch.nn.functional.cosine_similarity(
             z_mean_target.float(),
