@@ -27,6 +27,7 @@ import torch
 
 from mira.data.batch import VideoActionBatch
 from mira.data.counterstrike import CS2_KEYS, CounterStrikeClipMeta
+from mira.data.decode import _resize
 from mira.data.training_loader import create_loader
 
 GroupMode = Literal["single", "synchronized", "shuffled"]
@@ -81,6 +82,153 @@ def batch_signature(
         "sample_keys": [row["sample_key"] for row in metadata_rows],
         "source_start_frames": [row["source_start_frame"] for row in metadata_rows],
     }
+
+
+def assess_decoded_video_parity(
+    reference: torch.Tensor,
+    candidate: torch.Tensor,
+    *,
+    max_mean_abs: float = 0.0,
+    max_abs: int = 0,
+    max_fraction_different: float = 0.0,
+) -> dict[str, Any]:
+    """Compare model-facing decoded pixels against preregistered tolerances.
+
+    The comparison is deliberately separate from throughput: an alternative decoder is not eligible
+    for training merely because it is faster.  Both tensors must have the same shape and dtype, and
+    all three declared difference limits must hold.
+    """
+    if reference.shape != candidate.shape:
+        return {
+            "status": "fail",
+            "error": f"shape mismatch: reference={tuple(reference.shape)}, candidate={tuple(candidate.shape)}",
+        }
+    if reference.dtype != candidate.dtype:
+        return {
+            "status": "fail",
+            "error": f"dtype mismatch: reference={reference.dtype}, candidate={candidate.dtype}",
+        }
+    if reference.dtype != torch.uint8:
+        return {
+            "status": "fail",
+            "error": f"expected uint8 model-facing video, got {reference.dtype}",
+        }
+
+    reference_cpu = reference.detach().cpu().contiguous()
+    candidate_cpu = candidate.detach().cpu().contiguous()
+    difference = (reference_cpu.to(torch.int16) - candidate_cpu.to(torch.int16)).abs()
+    mean_abs = float(difference.float().mean())
+    observed_max = int(difference.max())
+    fraction_different = float((difference != 0).float().mean())
+    thresholds = {
+        "max_mean_abs": max_mean_abs,
+        "max_abs": max_abs,
+        "max_fraction_different": max_fraction_different,
+    }
+    observed = {
+        "mean_abs": mean_abs,
+        "max_abs": observed_max,
+        "fraction_different": fraction_different,
+    }
+    limits = {
+        "mean_abs": max_mean_abs,
+        "max_abs": max_abs,
+        "fraction_different": max_fraction_different,
+    }
+    violations = [name for name, value in observed.items() if value > limits[name]]
+    return {
+        "status": "pass" if not violations else "fail",
+        "shape": list(reference_cpu.shape),
+        "dtype": str(reference_cpu.dtype),
+        "reference_sha256": _tensor_sha256(reference_cpu),
+        "candidate_sha256": _tensor_sha256(candidate_cpu),
+        "observed": observed,
+        "thresholds": thresholds,
+        "violations": violations,
+    }
+
+
+def compare_torchcodec_cpu_cuda(
+    data_root: str | Path,
+    *,
+    split: str = "train",
+    map_slug: str = "dust2",
+    clip_len: int = 16,
+    target_fps: int = 8,
+    frame_size: tuple[int, int] = (168, 308),
+    seed: int = 28,
+    max_mean_abs: float = 0.0,
+    max_abs: int = 0,
+    max_fraction_different: float = 0.0,
+) -> dict[str, Any]:
+    """Compare CPU TorchCodec with CUDA TorchCodec on one fixed ten-POV group."""
+    if not torch.cuda.is_available():
+        return {
+            "status": "fail",
+            "error": "CUDA is unavailable; cannot evaluate the TorchCodec CUDA candidate",
+        }
+
+    root = Path(data_root)
+    reference_batch, metadata = next(
+        iter(
+            _loader(
+                root,
+                split=split,
+                map_slug=map_slug,
+                group_mode="synchronized",
+                clip_len=clip_len,
+                target_fps=target_fps,
+                frame_size=frame_size,
+                num_workers=0,
+                prefetch_factor=2,
+                persistent_workers=False,
+                pin_memory=False,
+                shuffle=False,
+                infinite=False,
+                seed=seed,
+            )
+        )
+    )
+    validate_batch_contract(
+        reference_batch,
+        metadata,
+        group_mode="synchronized",
+        clip_len=clip_len,
+    )
+
+    from torchcodec.decoders import VideoDecoder  # pyright: ignore[reportPrivateImportUsage]
+
+    candidate_rows: list[torch.Tensor] = []
+    for item in metadata:
+        video_path = root / "videos" / f"{item.sample_key}.mp4"
+        if not video_path.is_file():
+            video_path = root / "videos" / "360p" / f"{item.sample_key}.mp4"
+        if not video_path.is_file():
+            raise FileNotFoundError(f"Missing materialized CounterStrike-1K video: {video_path}")
+        frames = VideoDecoder(video_path, device="cuda").get_frames_at(item.frame_indices).data
+        if frame_size is not None:
+            frames = _resize(frames, frame_size)
+        candidate_rows.append(frames)
+    candidate = torch.stack(candidate_rows)
+    torch.cuda.synchronize()
+
+    result = assess_decoded_video_parity(
+        reference_batch.video,
+        candidate,
+        max_mean_abs=max_mean_abs,
+        max_abs=max_abs,
+        max_fraction_different=max_fraction_different,
+    )
+    result.update(
+        {
+            "reference_backend": "torchcodec_cpu",
+            "candidate_backend": "torchcodec_cuda",
+            "round_id": metadata[0].round_id,
+            "sample_keys": [item.sample_key for item in metadata],
+            "source_start_frame": metadata[0].source_start_frame,
+        }
+    )
+    return result
 
 
 def validate_batch_contract(
@@ -431,6 +579,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--timed-batches", type=int, default=100)
     parser.add_argument("--transfer-device", default=None)
     parser.add_argument(
+        "--compare-torchcodec-cuda",
+        action="store_true",
+        help="Fail closed unless CUDA TorchCodec matches CPU TorchCodec on a fixed ten-POV group.",
+    )
+    parser.add_argument("--cuda-parity-max-mean-abs", type=float, default=0.0)
+    parser.add_argument("--cuda-parity-max-abs", type=int, default=0)
+    parser.add_argument("--cuda-parity-max-fraction-different", type=float, default=0.0)
+    parser.add_argument(
         "--skip-parity-check",
         action="store_true",
         help="Skip the fixed first-round single-vs-synchronized tensor equality gate.",
@@ -466,8 +622,13 @@ def main(argv: list[str] | None = None) -> int:
             "warmup_batches": args.warmup_batches,
             "timed_batches": args.timed_batches,
             "transfer_device": args.transfer_device,
+            "compare_torchcodec_cuda": args.compare_torchcodec_cuda,
+            "cuda_parity_max_mean_abs": args.cuda_parity_max_mean_abs,
+            "cuda_parity_max_abs": args.cuda_parity_max_abs,
+            "cuda_parity_max_fraction_different": args.cuda_parity_max_fraction_different,
         },
         "parity": None,
+        "decoder_parity": None,
         "results": [],
     }
     failures = 0
@@ -485,6 +646,30 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:  # noqa: BLE001 - preserve failed benchmark evidence
             failures += 1
             payload["parity"] = {
+                "status": "fail",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+
+    if args.compare_torchcodec_cuda:
+        try:
+            payload["decoder_parity"] = compare_torchcodec_cpu_cuda(
+                args.data_root,
+                split=args.split,
+                map_slug=args.map_slug,
+                clip_len=args.clip_len,
+                target_fps=args.target_fps,
+                frame_size=frame_size,
+                seed=args.seed,
+                max_mean_abs=args.cuda_parity_max_mean_abs,
+                max_abs=args.cuda_parity_max_abs,
+                max_fraction_different=args.cuda_parity_max_fraction_different,
+            )
+            if payload["decoder_parity"]["status"] != "pass":
+                failures += 1
+        except Exception as exc:  # noqa: BLE001 - preserve failed candidate evidence
+            failures += 1
+            payload["decoder_parity"] = {
                 "status": "fail",
                 "error_type": type(exc).__name__,
                 "error": str(exc),

@@ -9,6 +9,7 @@ import torch
 
 from mira.data.counterstrike import CS2_ACTION_DTYPE, CS2_KEYS
 from mira.data.counterstrike_benchmark import (
+    assess_decoded_video_parity,
     batch_signature,
     validate_batch_contract,
     verify_single_synchronized_parity,
@@ -168,6 +169,61 @@ def test_benchmark_contract_and_signature_fail_closed(tmp_path, monkeypatch) -> 
     metadata[0].source_start_frame += 1
     with pytest.raises(ValueError, match="one source start"):
         validate_batch_contract(batch, metadata, group_mode="synchronized", clip_len=2)
+
+
+def test_decoded_video_parity_is_exact_by_default() -> None:
+    reference = torch.arange(48, dtype=torch.uint8).reshape(1, 1, 3, 4, 4)
+
+    exact = assess_decoded_video_parity(reference, reference.clone())
+    assert exact["status"] == "pass"
+    assert exact["observed"] == {
+        "mean_abs": 0.0,
+        "max_abs": 0,
+        "fraction_different": 0.0,
+    }
+    assert exact["reference_sha256"] == exact["candidate_sha256"]
+
+    changed = reference.clone()
+    changed[..., 0, 0] += 1
+    mismatch = assess_decoded_video_parity(reference, changed)
+    assert mismatch["status"] == "fail"
+    assert set(mismatch["violations"]) == {
+        "mean_abs",
+        "max_abs",
+        "fraction_different",
+    }
+
+
+def test_decoded_video_parity_uses_declared_tolerances() -> None:
+    reference = torch.zeros((1, 1, 3, 2, 2), dtype=torch.uint8)
+    candidate = reference.clone()
+    candidate[..., 0, 0] = 2
+
+    result = assess_decoded_video_parity(
+        reference,
+        candidate,
+        max_mean_abs=0.5,
+        max_abs=2,
+        max_fraction_different=0.25,
+    )
+    assert result["status"] == "pass"
+    assert result["thresholds"] == {
+        "max_mean_abs": 0.5,
+        "max_abs": 2,
+        "max_fraction_different": 0.25,
+    }
+
+
+def test_decoded_video_parity_rejects_shape_and_dtype_changes() -> None:
+    reference = torch.zeros((1, 1, 3, 2, 2), dtype=torch.uint8)
+
+    shape = assess_decoded_video_parity(reference, reference[:, :, :, :, :1])
+    assert shape["status"] == "fail"
+    assert "shape mismatch" in shape["error"]
+
+    dtype = assess_decoded_video_parity(reference, reference.float())
+    assert dtype["status"] == "fail"
+    assert "dtype mismatch" in dtype["error"]
 
 
 def test_persistent_worker_loader_configuration(tmp_path) -> None:
