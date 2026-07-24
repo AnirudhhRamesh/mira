@@ -13,16 +13,36 @@ codec_checkpoint=${CS1K_CODEC_CHECKPOINT:?Set CS1K_CODEC_CHECKPOINT on every nod
 output_root=${CS1K_OUTPUT_ROOT:?Set CS1K_OUTPUT_ROOT to a shared result directory}
 arm_hours=${CS1K_ARM_HOURS:?Set the per-arm wall-clock budget}
 seed=${CS1K_SEED:-28}
-arm_order=${CS1K_ARM_ORDER:-synchronized,shuffled}
+if ! [[ "$seed" =~ ^[0-9]+$ ]]; then
+  echo "CS1K_SEED must be a non-negative integer" >&2
+  exit 1
+fi
+if (( seed % 2 == 0 )); then
+  default_arm_order=synchronized,shuffled
+else
+  default_arm_order=shuffled,synchronized
+fi
+arm_order=${CS1K_ARM_ORDER:-$default_arm_order}
 
 nnodes=${NNODES:-4}
 node_rank=${NODE_RANK:?Set NODE_RANK=0..NNODES-1}
 nproc_per_node=${NPROC_PER_NODE:-1}
 master_addr=${MASTER_ADDR:?Set MASTER_ADDR to the rank-0 hostname or IP}
 master_port=${MASTER_PORT:-29500}
-dataloader_workers=${CS1K_DATALOADER_WORKERS:-8}
-dataloader_prefetch_factor=${CS1K_DATALOADER_PREFETCH_FACTOR:-2}
-dataloader_persistent_workers=${CS1K_DATALOADER_PERSISTENT_WORKERS:-true}
+dataloader_workers=${CS1K_DATALOADER_WORKERS:?Freeze workers from the GH200 loader benchmark}
+dataloader_prefetch_factor=${CS1K_DATALOADER_PREFETCH_FACTOR:?Freeze prefetch from the GH200 benchmark}
+dataloader_persistent_workers=${CS1K_DATALOADER_PERSISTENT_WORKERS:?Freeze persistence from the benchmark}
+dataloader_pin_memory=${CS1K_DATALOADER_PIN_MEMORY:?Freeze pin-memory from the GH200 benchmark}
+loader_benchmark_jsons=${CS1K_LOADER_BENCHMARK_JSONS:?Provide at least three GH200 benchmark JSONs}
+
+if [[ "$nnodes" != 4 || "$nproc_per_node" != 1 ]]; then
+  echo "The preregistered GH200 topology is exactly four nodes with one process/GPU per node" >&2
+  exit 1
+fi
+if ! [[ "$node_rank" =~ ^[0-3]$ ]]; then
+  echo "NODE_RANK must be one of 0, 1, 2, or 3" >&2
+  exit 1
+fi
 
 python_bin=${MIRA_PYTHON:-$project_dir/.pixi/envs/default/bin/python}
 torchrun_bin=${TORCHRUN_BIN:-$(dirname "$python_bin")/torchrun}
@@ -35,6 +55,11 @@ export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 export NCCL_DEBUG=${NCCL_DEBUG:-INFO}
 export WANDB_MODE=disabled
 
+code_commit=$(git rev-parse HEAD)
+if [[ -n "$(git status --porcelain=v1)" ]]; then
+  echo "GH200 publication runs require a clean source tree" >&2
+  exit 1
+fi
 if [[ ! -f "$codec_checkpoint" ]]; then
   echo "Codec checkpoint not found: $codec_checkpoint" >&2
   exit 1
@@ -58,6 +83,15 @@ fi
 experiment_root=$output_root/seed_$seed
 node_provenance=$experiment_root/provenance/node_$node_rank
 mkdir -p "$node_provenance"
+read -r -a loader_benchmark_paths <<<"$loader_benchmark_jsons"
+"$python_bin" scripts/validate_cs2_loader_selection.py "${loader_benchmark_paths[@]}" \
+  --num-workers "$dataloader_workers" \
+  --prefetch-factor "$dataloader_prefetch_factor" \
+  --persistent-workers "$dataloader_persistent_workers" \
+  --pin-memory "$dataloader_pin_memory" \
+  --expected-git-commit "$code_commit" \
+  --expected-gpu-substring GH200 \
+  --output "$node_provenance/frozen_loader_selection.json"
 "$python_bin" scripts/prepare_counterstrike1k.py \
   --data-root "$dataset_dir" \
   --map-slug dust2 \
@@ -91,6 +125,8 @@ printf '%s\n' \
   "dataloader_workers=$dataloader_workers" \
   "dataloader_prefetch_factor=$dataloader_prefetch_factor" \
   "dataloader_persistent_workers=$dataloader_persistent_workers" \
+  "dataloader_pin_memory=$dataloader_pin_memory" \
+  "frozen_loader_selection_sha256=$(sha256sum "$node_provenance/frozen_loader_selection.json" | cut -d' ' -f1)" \
   >"$node_provenance/launcher.env"
 
 torchrun_args=(
@@ -132,6 +168,7 @@ for arm in "${arms[@]}"; do
     dataloader.shuffle_buffer_size=100 \
     dataloader.prefetch_factor="$dataloader_prefetch_factor" \
     dataloader.persistent_workers="$dataloader_persistent_workers" \
+    dataloader.pin_memory="$dataloader_pin_memory" \
     validation.val_first=true \
     validation.val_every=1000 \
     validation.val_n_samples=40 \
