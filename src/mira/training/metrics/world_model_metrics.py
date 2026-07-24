@@ -71,6 +71,9 @@ class WorldModelMetricsConfig(BaseModel):
     dino_max_chunk_size: int | None = None
     # How many eval samples to visualize (logged to W&B from the metrics loop).
     num_viz_samples: int = 8
+    # Feature backbone used by DINO drift/Frechet metrics. DINOv3 is the paper default; public
+    # DINOv2-B/14 enables reproducible evaluation without gated weights.
+    dino_model: str = "dinov3_vitb16"
     # Inference settings (e.g. n_diffusion_steps, noise_level) used when unrolling the world model.
     inference: WorldModelInferenceConfig = WorldModelInferenceConfig()
 
@@ -126,7 +129,7 @@ class WorldModelMetrics:
             f"fdd_slice_frames ({config.fdd_slice_frames})"
         )
         self.num_slices = config.num_unrolled_frames // config.fdd_slice_frames
-        self.dino = DinoForMetrics(model_size="base").to(device)
+        self.dino = DinoForMetrics(model_name=config.dino_model).to(device)
         inception_block_idx = InceptionV3ForFID.BLOCK_INDEX_BY_DIM[INCEPTION_FID_DIM]
         self._inception = InceptionV3ForFID([inception_block_idx]).to(device).eval()
         self._inception.requires_grad_(False)

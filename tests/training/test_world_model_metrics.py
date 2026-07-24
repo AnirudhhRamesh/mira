@@ -11,7 +11,7 @@ import pytest
 import torch
 
 from mira.training.metrics.frechet import SlicedFrechetMetric
-from mira.training.metrics.image_metrics import OnlineGaussian
+from mira.training.metrics.image_metrics import DinoForMetrics, OnlineGaussian
 from mira.training.metrics.world_model_metrics import (
     WorldModelMetricsConfig,
     build_frechet_curve_plots,
@@ -57,9 +57,37 @@ def test_world_model_metrics_config_defaults() -> None:
     config = WorldModelMetricsConfig(num_unrolled_frames=120, drift_metric_frames=20)
     assert config.fdd_slice_frames == 20
     assert config.eval_temporal_downsampling is None
+    assert config.dino_model == "dinov3_vitb16"
     # The inference rollout config defaults are carried through.
     assert config.inference.n_diffusion_steps == 10
     assert config.inference.schedule_type == "linear_quadratic"
+
+
+def test_dino_metrics_public_v2_loading(monkeypatch) -> None:
+    class FakeDino(torch.nn.Module):
+        def get_intermediate_layers(self, x, **_kwargs):
+            return [torch.zeros((len(x), 768, 2, 3))]
+
+    calls: list[dict] = []
+
+    def fake_hub_load(**kwargs):
+        calls.append(kwargs)
+        return FakeDino()
+
+    monkeypatch.setattr(torch.hub, "load", fake_hub_load)
+    model = DinoForMetrics(model_name="dinov2_vitb14")
+
+    assert model.dino_dim == 768
+    assert model.patch_size == 14
+    assert calls == [
+        {
+            "repo_or_dir": "facebookresearch/dinov2",
+            "model": "dinov2_vitb14",
+            "source": "github",
+            "verbose": False,
+            "pretrained": True,
+        }
+    ]
 
 
 def test_build_frechet_curve_plots_one_plot_per_curve() -> None:

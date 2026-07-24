@@ -63,8 +63,10 @@ def test_validation_loss_multi_offline(monkeypatch) -> None:
 def test_measure_denoise_speed_single_offline(monkeypatch) -> None:
     model = build_world_model(monkeypatch)
     batch = make_batch(batch_size=1)
+    original_video = batch.video.clone()
     result = EVAL.measure_denoise_speed(model, batch, DETERMINISTIC, n_frames=2)
     assert result["denoise_latent_fps"] > 0
+    assert torch.equal(batch.video, original_video)
 
 
 def test_measure_denoise_speed_multi_offline(monkeypatch) -> None:
@@ -80,11 +82,26 @@ def test_load_eval_metrics_config_reads_yaml_and_overrides() -> None:
     # Defaults from configs/eval_world_model.yaml.
     assert config.num_samples == 2048
     assert config.compile is False
+    assert config.dino_model == "dinov3_vitb16"
     assert config.inference.schedule_type == "linear"
     assert config.inference.noise_level == 0.0
 
     overridden = EVAL.load_eval_metrics_config(num_samples=4, no_compile=True)
     assert overridden.num_samples == 4
+
+
+@pytest.mark.parametrize(
+    ("n_samples", "batch_size", "expected"),
+    [(1, 1, 1), (100, 10, 10), (52, 1, 52)],
+)
+def test_exact_num_batches(n_samples: int, batch_size: int, expected: int) -> None:
+    assert EVAL._exact_num_batches("samples", n_samples, batch_size) == expected
+
+
+@pytest.mark.parametrize(("n_samples", "batch_size"), [(0, 1), (10, 0), (11, 10)])
+def test_exact_num_batches_rejects_ambiguous_counts(n_samples: int, batch_size: int) -> None:
+    with pytest.raises(ValueError):
+        EVAL._exact_num_batches("samples", n_samples, batch_size)
 
 
 def test_world_model_metrics_and_viz_offline(monkeypatch, tmp_path) -> None:
@@ -148,10 +165,14 @@ def test_offline_eval_end_to_end_real_checkpoint() -> None:
     model, _ = load_world_model(checkpoint, device=device)
     model = model.eval()
 
-    n_players = getattr(model, "n_players", 1)
-    batch_size = (cfg.validation.batch_size or cfg.run.batch_size) * n_players
+    batch_size = cfg.validation.batch_size or cfg.run.batch_size
     val_loader = EVAL._build_loader(
-        cfg, model, clip_len=model.config.video.timesteps * 2, batch_size=batch_size, seed=37
+        cfg,
+        model,
+        split=cfg.dataset.get("test_split", "test"),
+        clip_len=model.config.video.timesteps,
+        batch_size=batch_size,
+        seed=37,
     )
     metrics = EVAL.run_validation_loss(model, iter(val_loader), device, n_batches=1)
     assert math.isfinite(metrics["loss_total"])

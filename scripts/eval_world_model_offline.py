@@ -20,12 +20,19 @@ The checkpoint may be a local path or a W&B run -- anything ``resolve_checkpoint
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import logging
+import os
 import time
 from collections import defaultdict
 from collections.abc import Iterator
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+# This must be set before importing Torch for strict deterministic CUDA matmul.
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 import torch
 
@@ -191,11 +198,13 @@ def measure_denoise_speed(
     config: WorldModelInferenceConfig | None = None,
     n_frames: int = SPEED_BENCH_FRAMES,
 ) -> dict[str, float]:
-    """Time the pure denoising rollout (no decode / metrics) at batch size 1, after a short warmup."""
+    """Time the pure denoising rollout (no decode / metrics) after a short warmup."""
     config = config or WorldModelInferenceConfig()
     with torch.no_grad(), _autocast(model.device):
-        measure_rollout_speed(model, batch, config, n_frames=min(4, n_frames))  # warmup
-        return measure_rollout_speed(model, batch, config, n_frames=n_frames)
+        # rollout() preprocesses its input in place. Separate clones keep the warmup from dividing
+        # the timed input by 255 a second time.
+        measure_rollout_speed(model, batch.clone(), config, n_frames=min(4, n_frames))  # warmup
+        return measure_rollout_speed(model, batch.clone(), config, n_frames=n_frames)
 
 
 def _frame_size(cfg) -> tuple[int, int] | None:
@@ -203,13 +212,25 @@ def _frame_size(cfg) -> tuple[int, int] | None:
     return tuple(fs) if fs is not None else None  # type: ignore[return-value]
 
 
-def _build_loader(cfg, model: "LatentWorldModel", *, clip_len: int, batch_size: int, seed: int):
+def _build_loader(
+    cfg,
+    model: "LatentWorldModel",
+    *,
+    split: str,
+    clip_len: int,
+    batch_size: int,
+    seed: int,
+):
     """Build a held-out eval loader from the checkpoint's dataset config (fixed seed, no replays)."""
     from mira.data.training_loader import create_loader  # noqa: PLC0415
 
     n_players = getattr(model, "n_players", 1)
     return create_loader(
         index_path=cfg.dataset.test_index,
+        dataset_backend=cfg.dataset.get("backend", "rocket_science"),
+        split=split,
+        map_slug=cfg.dataset.get("map_slug"),
+        group_mode=cfg.dataset.get("group_mode"),
         clip_len=clip_len,
         target_fps=model.config.video.fps,
         action_fps=model.config.actions.target_fps,
@@ -220,6 +241,7 @@ def _build_loader(cfg, model: "LatentWorldModel", *, clip_len: int, batch_size: 
         frame_size=_frame_size(cfg),
         valid_keys=list(model.config.actions.valid_keys),
         seed=seed,
+        shuffle=False,
         exclude_replays=True,
         infinite=True,
     )
@@ -243,6 +265,39 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--no-compile", action="store_true", help="Disable torch.compile.")
     parser.add_argument(
+        "--split",
+        choices=["val", "test"],
+        default=None,
+        help="Override the held-out manifest split (default: training config test_split).",
+    )
+    parser.add_argument(
+        "--dino-model",
+        default=None,
+        help="DINO metrics backbone, e.g. public dinov2_vitb14.",
+    )
+    parser.add_argument("--seed", type=int, default=37, help="Base deterministic eval seed.")
+    parser.add_argument(
+        "--deterministic",
+        action="store_true",
+        help="Require deterministic Torch kernels (also set CUBLAS_WORKSPACE_CONFIG=:4096:8).",
+    )
+    parser.add_argument("--n-context-frames", type=int, default=None)
+    parser.add_argument("--num-unrolled-frames", type=int, default=None)
+    parser.add_argument("--drift-metric-frames", type=int, default=None)
+    parser.add_argument("--fdd-slice-frames", type=int, default=None)
+    parser.add_argument(
+        "--per-device-batch-size",
+        type=int,
+        default=None,
+        help="Evaluation group batch size (the loader expands each group by n_players).",
+    )
+    parser.add_argument(
+        "--results-json",
+        type=Path,
+        default=None,
+        help="Write scalar results and evaluation settings to this JSON file.",
+    )
+    parser.add_argument(
         "--n-diffusion-steps", type=int, default=None, help="Override rollout diffusion steps."
     )
     parser.add_argument("--schedule-type", type=str, default=None, choices=["linear", "linear_quadratic"])
@@ -253,6 +308,29 @@ def parse_args() -> argparse.Namespace:
         help="kv-cache noise level; 'none' merges the cache update into the last diffusion step.",
     )
     return parser.parse_args()
+
+
+def _exact_num_batches(label: str, n_samples: int, batch_size: int) -> int:
+    """Convert an exact requested sample count to batches without silently dropping samples."""
+    if n_samples < 1:
+        raise ValueError(f"{label} must be >= 1, got {n_samples}")
+    if batch_size < 1:
+        raise ValueError(f"{label} batch size must be >= 1, got {batch_size}")
+    quotient, remainder = divmod(n_samples, batch_size)
+    if remainder:
+        raise ValueError(
+            f"{label}={n_samples} must be divisible by batch_size={batch_size}; "
+            "choose exact counts so arms evaluate the same number of examples"
+        )
+    return quotient
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _inference_overrides(
@@ -276,10 +354,13 @@ def main() -> None:
 
     from mira.inference.loading import load_world_model  # noqa: PLC0415
     from mira.training.checkpoints import resolve_checkpoint  # noqa: PLC0415
+    from mira.training.reproducibility import seed_everything  # noqa: PLC0415
 
+    seed_everything(args.seed, deterministic=args.deterministic)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     checkpoint = resolve_checkpoint(args.checkpoint).resolve()
     cfg = load_run_config(checkpoint)
+    eval_split = args.split or cfg.dataset.get("test_split", "test")
     output_dir = args.output_dir or (checkpoint.parent / "offline_eval")
 
     model, _ = load_world_model(checkpoint, device=device)
@@ -291,20 +372,41 @@ def main() -> None:
         no_compile=args.no_compile,
     )
     eval_config.inference = _inference_overrides(args_dict, eval_config.inference)
+    if args.dino_model is not None:
+        eval_config.dino_model = args.dino_model
+    if args.per_device_batch_size is not None:
+        eval_config.per_device_batch_size = args.per_device_batch_size
+    for argument, field in (
+        ("n_context_frames", "n_context_frames"),
+        ("num_unrolled_frames", "num_unrolled_frames"),
+        ("drift_metric_frames", "drift_metric_frames"),
+        ("fdd_slice_frames", "fdd_slice_frames"),
+    ):
+        if (value := getattr(args, argument)) is not None:
+            setattr(eval_config, field, value)
     compile_models = (not args.no_compile) and bool(cfg.run.get("compile"))
 
     results: dict[str, float] = {}
+    val_num_batches = 0
+    metric_num_batches = 0
 
     if not args.skip_validation:
-        batch_size = (cfg.validation.batch_size or cfg.run.batch_size) * getattr(model, "n_players", 1)
+        batch_size = cfg.validation.batch_size or cfg.run.batch_size
         n_samples = args.val_n_samples if args.val_n_samples is not None else cfg.validation.val_n_samples
+        val_num_batches = _exact_num_batches("val_n_samples", n_samples, batch_size)
+        seed_everything(args.seed, deterministic=args.deterministic)
         val_loader = _build_loader(
-            cfg, model, clip_len=model.config.video.timesteps * 2, batch_size=batch_size, seed=37
+            cfg,
+            model,
+            split=eval_split,
+            clip_len=model.config.video.timesteps,
+            batch_size=batch_size,
+            seed=args.seed,
         )
         results |= {
-            f"test/{k}": v
+            f"{eval_split}/{k}": v
             for k, v in run_validation_loss(
-                model, iter(val_loader), device, n_batches=max(1, n_samples // batch_size)
+                model, iter(val_loader), device, n_batches=val_num_batches
             ).items()
         }
 
@@ -314,14 +416,18 @@ def main() -> None:
         if eval_config.n_context_frames is not None:
             model.set_inference_context(eval_config.n_context_frames)
         stride = eval_config.eval_temporal_downsampling or model.temporal_downsampling
+        metric_num_batches = _exact_num_batches(
+            "num_samples", eval_config.num_samples, eval_config.per_device_batch_size
+        )
+        seed_everything(args.seed + 1, deterministic=args.deterministic)
         metrics_loader = _build_loader(
             cfg,
             model,
+            split=eval_split,
             clip_len=model.config.n_context_frames + eval_config.num_unrolled_frames * stride,
             batch_size=eval_config.per_device_batch_size,
-            seed=38,
+            seed=args.seed + 1,
         )
-        num_eval_batches = max(1, eval_config.num_samples // eval_config.per_device_batch_size)
         results |= {
             f"metrics/{k}": v
             for k, v in run_world_model_metrics(
@@ -329,28 +435,29 @@ def main() -> None:
                 iter(metrics_loader),
                 device,
                 wm_metrics_config=eval_config,
-                num_eval_batches=num_eval_batches,
+                num_eval_batches=metric_num_batches,
                 num_viz=args.viz,
                 output_dir=output_dir,
                 compile_models=compile_models,
             ).items()
         }
-        # Pure denoising speed (bs=1, no decode/metrics).
+        # Pure denoising speed at the same group batch size as the metric pass (no decode/metrics).
         try:
+            seed_everything(args.seed + 2, deterministic=args.deterministic)
             speed_batch = _build_loader(
                 cfg,
                 model,
+                split=eval_split,
                 clip_len=model.config.n_context_frames + SPEED_BENCH_FRAMES * model.temporal_downsampling,
-                batch_size=1,
-                seed=39,
+                batch_size=eval_config.per_device_batch_size,
+                seed=args.seed + 2,
             )
             batch, _ = next(iter(speed_batch))
             batch = batch.to(device)
-            model.codec.preprocess_batch(batch)
-            results |= {
-                f"metrics/{k}": v
-                for k, v in measure_denoise_speed(model, batch, eval_config.inference).items()
-            }
+            speed_results = measure_denoise_speed(model, batch, eval_config.inference)
+            speed_results["denoise_raw_pov_rows"] = float(len(batch))
+            speed_results["denoise_pov_latent_fps"] = speed_results["denoise_latent_fps"] * len(batch)
+            results |= {f"metrics/{k}": v for k, v in speed_results.items()}
         except Exception:
             logger.exception("Denoise-speed measurement failed; skipping it.")
 
@@ -358,6 +465,45 @@ def main() -> None:
     logger.info("Offline eval results:")
     for k, v in results.items():
         logger.info("  %s: %.4f", k, v)
+    if args.results_json is not None:
+        args.results_json.parent.mkdir(parents=True, exist_ok=True)
+        n_players = getattr(model, "n_players", 1)
+        payload = {
+            "checkpoint": str(checkpoint),
+            "checkpoint_sha256": _sha256(checkpoint),
+            "created_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "split": eval_split,
+            "seed": args.seed,
+            "deterministic": args.deterministic,
+            "dataset_backend": cfg.dataset.get("backend", "rocket_science"),
+            "map_slug": cfg.dataset.get("map_slug"),
+            "group_mode": cfg.dataset.get("group_mode"),
+            "n_players": n_players,
+            "dino_model": eval_config.dino_model,
+            "world_model_metrics": eval_config.model_dump(),
+            "validation": {
+                "batch_size_groups": cfg.validation.batch_size or cfg.run.batch_size,
+                "num_batches": val_num_batches,
+                "requested_samples": (
+                    args.val_n_samples if args.val_n_samples is not None else cfg.validation.val_n_samples
+                ),
+                "raw_pov_rows_per_batch": (cfg.validation.batch_size or cfg.run.batch_size) * n_players,
+                "total_raw_pov_rows": val_num_batches
+                * (cfg.validation.batch_size or cfg.run.batch_size)
+                * n_players,
+            },
+            "metrics": {
+                "batch_size_groups": eval_config.per_device_batch_size,
+                "num_batches": metric_num_batches,
+                "requested_samples": eval_config.num_samples,
+                "raw_pov_rows_per_batch": eval_config.per_device_batch_size * n_players,
+                "total_raw_pov_rows": metric_num_batches * eval_config.per_device_batch_size * n_players,
+            },
+            "results": results,
+        }
+        temporary = args.results_json.with_suffix(args.results_json.suffix + ".tmp")
+        temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        temporary.replace(args.results_json)
 
 
 if __name__ == "__main__":

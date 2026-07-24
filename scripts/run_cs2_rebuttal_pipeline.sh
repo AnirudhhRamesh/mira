@@ -106,6 +106,7 @@ write_status single running
   world_model_metrics.num_unrolled_frames=4 \
   world_model_metrics.drift_metric_frames=4 \
   world_model_metrics.fdd_slice_frames=2 \
+  world_model_metrics.dino_model=dinov2_vitb14 \
   world_model_metrics.num_samples=100 \
   world_model_metrics.per_device_batch_size=10 \
   world_model_metrics.num_viz_samples=2 \
@@ -141,6 +142,7 @@ write_status shared running
   world_model_metrics.num_unrolled_frames=4 \
   world_model_metrics.drift_metric_frames=4 \
   world_model_metrics.fdd_slice_frames=2 \
+  world_model_metrics.dino_model=dinov2_vitb14 \
   world_model_metrics.num_samples=10 \
   world_model_metrics.per_device_batch_size=1 \
   world_model_metrics.num_viz_samples=2 \
