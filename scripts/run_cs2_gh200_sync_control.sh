@@ -116,6 +116,7 @@ for arm in "${arms[@]}"; do
     dataset.train_index="$dataset_dir" \
     dataset.n_players=10 \
     dataset.group_mode="$arm" \
+    dataset.validation_group_mode=synchronized \
     model.architecture.config.wm_config.codec_checkpoint="$codec_checkpoint" \
     run.seed="$seed" \
     run.steps=100000000 \

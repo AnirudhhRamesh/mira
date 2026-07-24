@@ -61,10 +61,12 @@ rounds?
 - different training grouping only.
 
 Both trained models are evaluated on synchronized test groups. Evaluating the shuffled-trained arm
-on shuffled groups would change the estimand and is prohibited. Run at least three training seeds;
-counterbalance arm order across seeds. `scripts/run_cs2_gh200_sync_control.sh` runs one seed and
-accepts an explicit arm order, while `scripts/run_cs2_gh200_sync_control_eval.sh` forces synchronized
-test grouping.
+on shuffled groups would change the estimand and is prohibited. During training,
+`dataset.validation_group_mode=synchronized` also forces both periodic validation and rollout
+metrics onto the same synchronized held-out task; only the training loader grouping differs. Run at
+least three training seeds; counterbalance arm order across seeds.
+`scripts/run_cs2_gh200_sync_control.sh` runs one seed and accepts an explicit arm order, while
+`scripts/run_cs2_gh200_sync_control_eval.sh` forces synchronized test grouping.
 
 ## Held-out endpoints
 

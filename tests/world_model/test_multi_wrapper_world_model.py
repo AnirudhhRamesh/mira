@@ -420,6 +420,69 @@ def test_n_players_consistency_check_raises_on_mismatch() -> None:
         train_script._create_dataloaders(cfg, None, model)
 
 
+def test_training_and_evaluation_group_modes_are_separate(monkeypatch) -> None:
+    """A shuffled control must still use synchronized held-out groups for both eval loaders."""
+    from omegaconf import OmegaConf
+
+    train_script = _load_train_script()
+    calls = []
+    monkeypatch.setattr(
+        train_script,
+        "create_loader",
+        lambda **kwargs: calls.append(kwargs) or object(),
+    )
+    cfg = OmegaConf.create(
+        {
+            "dataset": {
+                "backend": "counterstrike1k",
+                "train_index": "/data",
+                "test_index": "/data",
+                "train_split": "train",
+                "test_split": "test",
+                "map_slug": "dust2",
+                "n_players": 10,
+                "group_mode": "shuffled",
+                "validation_group_mode": "synchronized",
+                "exclude_replays": False,
+                "frame_size": [168, 308],
+            },
+            "dataloader": {
+                "num_workers": 4,
+                "shuffle_buffer_size": 100,
+                "prefetch_factor": 2,
+                "persistent_workers": True,
+                "pin_memory": True,
+            },
+            "run": {"batch_size": 1, "seed": 28},
+            "validation": {"batch_size": None},
+        }
+    )
+    model = SimpleNamespace(
+        n_players=10,
+        temporal_downsampling=2,
+        config=SimpleNamespace(
+            video=SimpleNamespace(fps=8, timesteps=16),
+            actions=SimpleNamespace(target_fps=8, valid_keys=["w"]),
+            n_context_frames=8,
+        ),
+        set_inference_context=lambda _: None,
+    )
+    metrics = SimpleNamespace(
+        n_context_frames=8,
+        num_unrolled_frames=4,
+        eval_temporal_downsampling=None,
+        per_device_batch_size=1,
+    )
+
+    train_script._create_dataloaders(cfg, metrics, model)
+
+    assert [call["group_mode"] for call in calls] == [
+        "shuffled",
+        "synchronized",
+        "synchronized",
+    ]
+
+
 # -- Multiplayer warm-start wiring -------------------------------------------------------------------
 
 SOURCE_REPO = os.environ.get("RS_SOURCE_REPO")

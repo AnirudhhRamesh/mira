@@ -61,6 +61,12 @@ def test_train_world_model_config_composes() -> None:
     assert cfg.world_model_metrics._target_.endswith("WorldModelMetricsConfig")
 
 
+def test_counterstrike_config_exposes_evaluation_group_override() -> None:
+    cfg = _compose(overrides=["dataset=counterstrike1k_dust2"])
+    assert cfg.dataset.group_mode == "single"
+    assert cfg.dataset.validation_group_mode is None
+
+
 def test_world_model_metrics_config_instantiates() -> None:
     from hydra.utils import instantiate
 

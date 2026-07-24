@@ -437,10 +437,11 @@ def _create_dataloaders(cfg: DictConfig, wm_metrics_config: WorldModelMetricsCon
     if wm_metrics_config.n_context_frames is not None:
         model.set_inference_context(wm_metrics_config.n_context_frames)
 
+    training_group_mode = cfg.dataset.get("group_mode")
+    evaluation_group_mode = cfg.dataset.get("validation_group_mode") or training_group_mode
     common = dict(
         dataset_backend=cfg.dataset.get("backend", "rocket_science"),
         map_slug=cfg.dataset.get("map_slug"),
-        group_mode=cfg.dataset.get("group_mode"),
         target_fps=model.config.video.fps,
         # Actions are sampled at their own rate, decoupled from the frame rate. The released default
         # has both at 20fps (one action per video frame), so this is a no-op; setting actions.target_fps
@@ -466,6 +467,7 @@ def _create_dataloaders(cfg: DictConfig, wm_metrics_config: WorldModelMetricsCon
         seed=cfg.run.seed,
         exclude_replays=cfg.dataset.exclude_replays,
         shuffle=True,
+        group_mode=training_group_mode,
         **common,
     )
     val_loader = create_loader(
@@ -476,6 +478,7 @@ def _create_dataloaders(cfg: DictConfig, wm_metrics_config: WorldModelMetricsCon
         seed=37,
         exclude_replays=True,
         shuffle=False,
+        group_mode=evaluation_group_mode,
         **common,
     )
     metrics_loader = create_loader(
@@ -486,6 +489,7 @@ def _create_dataloaders(cfg: DictConfig, wm_metrics_config: WorldModelMetricsCon
         seed=38,
         exclude_replays=True,
         shuffle=False,
+        group_mode=evaluation_group_mode,
         **common,
     )
     return train_loader, val_loader, metrics_loader
