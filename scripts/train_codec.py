@@ -37,7 +37,11 @@ from mira.codec.viz import (
 )
 from mira.data.training_loader import ClipMeta, create_loader
 from mira.training.checkpoint_manager import CheckpointManager
-from mira.training.distributed import get_distributed_settings, set_up_distributed
+from mira.training.distributed import (
+    broadcast_main_process_bool,
+    get_distributed_settings,
+    set_up_distributed,
+)
 from mira.training.ema import DistributedEMA
 from mira.training.lr_schedule import WarmupConstantCosineDecayLR
 from mira.training.metrics.distributed_metric import DistributedMetric
@@ -168,6 +172,9 @@ def train(cfg: DictConfig) -> None:
     start_step = _resume(cfg, checkpoint_manager, ema_latent_mean, ema_latent_std)
 
     losses: dict[str, torch.Tensor] = {}
+    # Start the timed budget only after every rank has loaded state and reached the same boundary.
+    if is_distributed:
+        dist.barrier()
     training_start_time = time.monotonic()
     max_duration_hours = cfg.run.get("max_duration_hours")
     iter_num = start_step - 1  # so the final save below is well-defined even if the loop never runs
@@ -227,10 +234,16 @@ def train(cfg: DictConfig) -> None:
         if is_distributed:
             dist.barrier()
 
-        if (
+        local_time_limit_reached = (
             max_duration_hours is not None
             and time.monotonic() - training_start_time >= float(max_duration_hours) * 3600
-        ):
+        )
+        time_limit_reached = (
+            broadcast_main_process_bool(local_time_limit_reached, device=device)
+            if max_duration_hours is not None
+            else False
+        )
+        if time_limit_reached:
             if is_main_process:
                 logger.info(
                     "Reached run.max_duration_hours=%.3f after step %d; saving final checkpoint.",
@@ -252,6 +265,10 @@ def train(cfg: DictConfig) -> None:
             iter_num, extra_data=_extra_data(iter_num, losses, ema_latent_mean, ema_latent_std), final=True
         )
     logger.info("Done training")
+    if is_distributed:
+        # Keep peers alive until rank 0 atomically publishes the final model and training state.
+        dist.barrier()
+        dist.destroy_process_group()
 
 
 def _extra_data(
