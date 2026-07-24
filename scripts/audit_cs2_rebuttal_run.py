@@ -495,6 +495,11 @@ class Auditor:
             _finite_results(payload, path)
             arm = path.stem
             seed = int(path.parent.name.removeprefix("seed_"))
+            self.require(
+                f"primary_eval.{path.parent.name}.{path.stem}.seed_membership",
+                seed in EXPECTED_PRIMARY_SEEDS,
+                seed,
+            )
             self._audit_result_identity(
                 check_prefix="primary_eval",
                 path=path,
@@ -550,6 +555,16 @@ class Auditor:
             arm = path.parent.name
             seed = int(path.parent.parent.name.removeprefix("seed_"))
             action_mode = path.stem
+            self.require(
+                f"{check_prefix}.{path.parent.parent.name}.{arm}.{action_mode}.seed_membership",
+                seed in EXPECTED_ACTION_SEEDS,
+                seed,
+            )
+            self.require(
+                f"{check_prefix}.{path.parent.parent.name}.{arm}.{action_mode}.mode_membership",
+                action_mode in EXPECTED_ACTION_MODES,
+                action_mode,
+            )
             self._audit_result_identity(
                 check_prefix=check_prefix,
                 path=path,
