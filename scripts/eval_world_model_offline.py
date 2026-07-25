@@ -20,6 +20,7 @@ The checkpoint may be a local path or a W&B run -- anything ``resolve_checkpoint
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import logging
@@ -52,7 +53,13 @@ logger = logging.getLogger(__name__)
 CONFIG_FILENAME = "world_model_config.yaml"
 EVAL_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "eval_world_model.yaml"
 SPEED_BENCH_FRAMES = 32
-ActionMode = Literal["true", "zero", "batch-shifted", "time-shifted"]
+ActionMode = Literal[
+    "true",
+    "zero",
+    "batch-shifted",
+    "round-shifted",
+    "time-shifted",
+]
 
 
 def _autocast(device: torch.device | int | str):
@@ -106,6 +113,8 @@ def run_validation_loss(
     val_iter: Iterator[tuple[VideoActionBatch, Any]],
     device: torch.device | int | str,
     n_batches: int,
+    *,
+    per_batch_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, float]:
     """Mirror ``train_world_model.run_validation``: average the forward diffusion loss on the test set."""
     import tqdm  # noqa: PLC0415
@@ -113,12 +122,41 @@ def run_validation_loss(
     model.eval()
     metric_trackers: dict[str, DistributedMetric] = defaultdict(lambda: DistributedMetric(device=device))
     t1 = time.time()
-    for _ in tqdm.trange(max(1, n_batches), desc="Validation loss"):
-        batch, _ = next(val_iter)
+    for batch_index in tqdm.trange(max(1, n_batches), desc="Validation loss"):
+        batch, metadata = next(val_iter)
         batch = batch.to(device)
         with torch.no_grad(), _autocast(device):
-            for k, v in model(batch).items():
+            batch_metrics = model(batch)
+            for k, v in batch_metrics.items():
                 metric_trackers[k].update(v)
+        if per_batch_records is not None:
+            round_ids = {str(getattr(item, "round_id", "")) for item in metadata}
+            if len(round_ids) != 1 or "" in round_ids:
+                raise ValueError("per-batch CS2 records require exactly one non-empty round_id")
+            donor_round_ids = sorted(
+                {
+                    str(getattr(item, "action_donor_round_id", ""))
+                    for item in metadata
+                    if getattr(item, "action_donor_round_id", None) is not None
+                }
+            )
+            per_batch_records.append(
+                {
+                    "batch_index": batch_index,
+                    "round_id": next(iter(round_ids)),
+                    "sample_keys": [str(getattr(item, "sample_key", "")) for item in metadata],
+                    "pov_indices": [int(getattr(item, "perspective")) for item in metadata],
+                    "action_donor_round_ids": donor_round_ids,
+                    "action_donor_sample_keys": [
+                        str(getattr(item, "action_donor_sample_key"))
+                        for item in metadata
+                        if getattr(item, "action_donor_sample_key", None) is not None
+                    ],
+                    "metrics": {
+                        key: float(value.detach().float().item()) for key, value in batch_metrics.items()
+                    },
+                }
+            )
 
     metrics = {k: tracker.compute_and_reset().item() for k, tracker in metric_trackers.items()}
     logger.info("Validation loss took %.1fs over %d batches", time.time() - t1, max(1, n_batches))
@@ -232,12 +270,60 @@ def _apply_action_mode(batch: VideoActionBatch, mode: ActionMode) -> VideoAction
         shift = max(1, actions.n_steps // 2)
         actions.key_presses = actions.key_presses.roll(shifts=shift, dims=1)
         actions.mouse_movements = actions.mouse_movements.roll(shifts=shift, dims=1)
+    elif mode == "round-shifted":
+        raise ValueError("round-shifted actions require metadata-aware _action_mode_iter")
     else:
         raise ValueError(f"Unsupported action mode {mode!r}")
     return VideoActionBatch(video=batch.video, actions=actions)
 
 
 def _action_mode_iter(loader, mode: ActionMode):
+    if mode == "round-shifted":
+        receiver_batch, receiver_metadata = next(loader)
+        for donor_batch, donor_metadata in loader:
+            if len(receiver_batch) != len(donor_batch):
+                raise ValueError("round-shifted receiver and donor batches differ in size")
+            receiver_rounds = {str(getattr(item, "round_id", "")) for item in receiver_metadata}
+            donor_rounds = {str(getattr(item, "round_id", "")) for item in donor_metadata}
+            if (
+                len(receiver_rounds) != 1
+                or len(donor_rounds) != 1
+                or "" in receiver_rounds
+                or "" in donor_rounds
+                or receiver_rounds == donor_rounds
+            ):
+                raise ValueError("round-shifted batches must contain two different complete rounds")
+            receiver_povs = [int(getattr(item, "perspective")) for item in receiver_metadata]
+            donor_povs = [int(getattr(item, "perspective")) for item in donor_metadata]
+            if receiver_povs != donor_povs:
+                raise ValueError("round-shifted donor must preserve POV-slot ordering")
+            annotated_metadata = []
+            for receiver, donor in zip(
+                receiver_metadata,
+                donor_metadata,
+                strict=True,
+            ):
+                annotated = copy.copy(receiver)
+                setattr(
+                    annotated,
+                    "action_donor_round_id",
+                    str(getattr(donor, "round_id")),
+                )
+                setattr(
+                    annotated,
+                    "action_donor_sample_key",
+                    str(getattr(donor, "sample_key")),
+                )
+                annotated_metadata.append(annotated)
+            yield (
+                VideoActionBatch(
+                    video=receiver_batch.video,
+                    actions=donor_batch.actions.clone(),
+                ),
+                annotated_metadata,
+            )
+            receiver_batch, receiver_metadata = donor_batch, donor_metadata
+        return
     for batch, metadata in loader:
         yield _apply_action_mode(batch, mode), metadata
 
@@ -325,7 +411,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--action-mode",
-        choices=["true", "zero", "batch-shifted", "time-shifted"],
+        choices=[
+            "true",
+            "zero",
+            "batch-shifted",
+            "round-shifted",
+            "time-shifted",
+        ],
         default="true",
         help="Deterministic action intervention; videos and rollout RNG stay fixed.",
     )
@@ -350,6 +442,15 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Write scalar results and evaluation settings to this JSON file.",
+    )
+    parser.add_argument(
+        "--per-batch-jsonl",
+        type=Path,
+        default=None,
+        help=(
+            "Write one validation-loss record per complete CS2 round. "
+            "Requires each evaluation batch to contain one round."
+        ),
     )
     parser.add_argument(
         "--n-diffusion-steps", type=int, default=None, help="Override rollout diffusion steps."
@@ -442,6 +543,7 @@ def main() -> None:
     compile_models = (not args.no_compile) and bool(cfg.run.get("compile"))
 
     results: dict[str, float] = {}
+    per_batch_records: list[dict[str, Any]] | None = [] if args.per_batch_jsonl is not None else None
     val_num_batches = 0
     metric_num_batches = 0
 
@@ -467,6 +569,7 @@ def main() -> None:
                 _action_mode_iter(iter(val_loader), args.action_mode),
                 device,
                 n_batches=val_num_batches,
+                per_batch_records=per_batch_records,
             ).items()
         }
 
@@ -529,6 +632,29 @@ def main() -> None:
     logger.info("Offline eval results:")
     for k, v in results.items():
         logger.info("  %s: %.4f", k, v)
+    per_batch_sha256 = None
+    if args.per_batch_jsonl is not None:
+        if per_batch_records is None or len(per_batch_records) != val_num_batches:
+            raise ValueError("per-batch validation records do not match the evaluated batch count")
+        args.per_batch_jsonl.parent.mkdir(parents=True, exist_ok=True)
+        temporary_records = args.per_batch_jsonl.with_name(f".{args.per_batch_jsonl.name}.tmp")
+        with temporary_records.open("w", encoding="utf-8") as handle:
+            for record in per_batch_records:
+                handle.write(
+                    json.dumps(
+                        {
+                            **record,
+                            "seed": args.seed,
+                            "action_mode": args.action_mode,
+                            "window_mode": args.window_mode,
+                            "split": eval_split,
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+        temporary_records.replace(args.per_batch_jsonl)
+        per_batch_sha256 = _sha256(args.per_batch_jsonl)
     if args.results_json is not None:
         args.results_json.parent.mkdir(parents=True, exist_ok=True)
         n_players = getattr(model, "n_players", 1)
@@ -568,6 +694,16 @@ def main() -> None:
                 "total_raw_pov_rows": metric_num_batches * eval_config.per_device_batch_size * n_players,
             },
             "results": results,
+            "per_batch_records": (
+                None
+                if args.per_batch_jsonl is None
+                else {
+                    "path": str(args.per_batch_jsonl),
+                    "sha256": per_batch_sha256,
+                    "count": len(per_batch_records or []),
+                    "cluster_unit": "round_id",
+                }
+            ),
         }
         temporary = args.results_json.with_suffix(args.results_json.suffix + ".tmp")
         temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")

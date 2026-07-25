@@ -188,6 +188,53 @@ def test_action_modes_are_deterministic_and_do_not_mutate_input() -> None:
     assert torch.equal(batch.actions.mouse_movements, original.actions.mouse_movements)
 
 
+def test_round_shifted_actions_use_next_round_and_same_pov_slots() -> None:
+    first = make_batch(batch_size=2, n_frames=4, n_actions=4)
+    second = make_batch(batch_size=2, n_frames=4, n_actions=4)
+    first.video.fill_(3)
+    first.actions.key_presses.fill_(1)
+    second.video.fill_(7)
+    second.actions.key_presses.fill_(2)
+    first_metadata = [
+        SimpleNamespace(
+            round_id="round_0",
+            sample_key=f"round_0_p{pov}",
+            perspective=pov,
+        )
+        for pov in range(2)
+    ]
+    second_metadata = [
+        SimpleNamespace(
+            round_id="round_1",
+            sample_key=f"round_1_p{pov}",
+            perspective=pov,
+        )
+        for pov in range(2)
+    ]
+
+    shifted, metadata = next(
+        EVAL._action_mode_iter(
+            iter(
+                [
+                    (first, first_metadata),
+                    (second, second_metadata),
+                ]
+            ),
+            "round-shifted",
+        )
+    )
+
+    assert torch.equal(shifted.video, first.video)
+    assert torch.equal(
+        shifted.actions.key_presses,
+        second.actions.key_presses,
+    )
+    assert [item.perspective for item in metadata] == [0, 1]
+    assert {item.action_donor_round_id for item in metadata} == {"round_1"}
+    assert [item.action_donor_sample_key for item in metadata] == ["round_1_p0", "round_1_p1"]
+    assert torch.equal(first.actions.key_presses, torch.ones_like(first.actions.key_presses))
+
+
 def test_world_model_metrics_and_viz_offline(monkeypatch, tmp_path) -> None:
     """The eval's metrics loop + viz writer run end-to-end on the stub model (gated on DINO/FID)."""
     pytest.importorskip("pytorch_fid")
