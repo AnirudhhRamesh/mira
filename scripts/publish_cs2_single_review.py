@@ -13,8 +13,6 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-import boto3
-
 SCHEMA = "mira-dust2-live-review-v1"
 SAFE_PROVENANCE = (
     "code_commit.txt",
@@ -270,6 +268,8 @@ def build_traces(
 
 
 def publish_once(args: argparse.Namespace) -> dict[str, Any]:
+    import boto3  # noqa: PLC0415 -- operational dependency, not needed for manifest unit tests
+
     run_root = args.run_root.resolve()
     if not (run_root / "pipeline_status.tsv").is_file():
         raise FileNotFoundError(f"not a started single-MIRA pipeline: {run_root}")
