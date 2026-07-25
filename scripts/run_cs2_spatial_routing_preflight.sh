@@ -99,6 +99,29 @@ printf '%s\n' \
   "dataloader_pin_memory=$dataloader_pin_memory" \
   >"$run_root/provenance/contract.env"
 
+telemetry_file=$run_root/provenance/gpu_timeseries.csv
+nvidia-smi \
+  --query-gpu=timestamp,name,memory.used,utilization.gpu,power.draw \
+  --format=csv \
+  >"$telemetry_file"
+(
+  while sleep 5; do
+    nvidia-smi \
+      --query-gpu=timestamp,name,memory.used,utilization.gpu,power.draw \
+      --format=csv,noheader \
+      >>"$telemetry_file"
+  done
+) &
+telemetry_pid=$!
+printf '%s\n' "$telemetry_pid" >"$run_root/provenance/gpu_telemetry.pid"
+stop_telemetry() {
+  if kill -0 "$telemetry_pid" 2>/dev/null; then
+    kill "$telemetry_pid" 2>/dev/null || true
+    wait "$telemetry_pid" 2>/dev/null || true
+  fi
+}
+trap stop_telemetry EXIT
+
 write_status training running
 "$python_bin" scripts/train_world_model.py \
   model=multi_wrapper_world_model_cs2_small \
