@@ -119,7 +119,9 @@ not retroactively reinterpreted as confirmatory evidence.
 Before spending GH200 compute, one one-hour synchronized spatial-router model (training seed 28) is
 trained on the amended training split using the frozen pilot codec. This is an operational
 preflight, not a model-quality comparison. It evaluates only all 54 release-validation rounds with
-diffusion seeds 37, 38, and 39. The preflight passes only if:
+diffusion seeds 37, 38, and 39. At each 1,000-step validation point, a fixed-seed, fixed-window
+rollout MP4 and JSON sidecar are written locally and mirrored to private S3 for live review. The
+preflight passes only if:
 
 - spatial routing preserves at least 0.95 of the projected cross-POV action-delta RMS;
 - cross-POV-shifted actions raise mean validation loss by at least 0.005 and at least 1% relative to

@@ -52,6 +52,10 @@ validation:
   val_first: true
   val_n_samples: 1024
   val_every: "2%"
+  # Optional deterministic MP4 trace written beside the run at the specified step cadence. This is
+  # independent of W&B and of the heavier DINO/Inception downstream metrics.
+  local_rollout_every: null
+  local_rollout_seed: 37
   downstream_val_every: "10%"  # how often to run the world-model metrics eval
 
 optim:

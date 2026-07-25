@@ -128,6 +128,8 @@ write_status training running
   validation.val_first=true \
   validation.val_every=1000 \
   validation.val_n_samples="$val_rounds" \
+  validation.local_rollout_every=1000 \
+  validation.local_rollout_seed=37 \
   validation.downstream_val_every=100000000 \
   optim.scheduler.warmup_steps=500 \
   optim.model_ema_decay=0.999 \

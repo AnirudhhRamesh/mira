@@ -58,6 +58,8 @@ def test_train_world_model_config_composes() -> None:
     assert cfg.dataloader.prefetch_factor == 2
     assert cfg.dataloader.persistent_workers is False
     assert cfg.dataloader.pin_memory is None
+    assert cfg.validation.local_rollout_every is None
+    assert cfg.validation.local_rollout_seed == 37
     assert cfg.world_model_metrics._target_.endswith("WorldModelMetricsConfig")
 
 

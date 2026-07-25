@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import hydra
+import numpy as np
 import torch
 import torch.distributed as dist
 import tqdm
@@ -57,6 +58,8 @@ from mira.training.visualization import (
     VideoForWandb,
     draw_text_on_first_frame,
     videos_for_wandb,
+    videos_to_grid,
+    write_video_ffmpeg,
 )
 from mira.world_model.latent_world_model import InferenceOutputs, LatentWorldModel
 
@@ -223,6 +226,22 @@ def train(cfg: DictConfig) -> None:
                 checkpoint_manager.maybe_save_checkpoint(iter_num, extra_data=_extra_data(iter_num, losses))
             if is_distributed:
                 dist.barrier()
+
+        local_rollout_every = cfg.validation.get("local_rollout_every")
+        if local_rollout_every is not None and periodic_event(
+            iter_num,
+            local_rollout_every,
+            cfg.run.steps,
+            include_0=cfg.validation.val_first,
+        ):
+            with checkpoint_manager.model_ema.average_parameters():
+                run_local_rollout_trace(
+                    cfg,
+                    raw_model,
+                    metrics_loader,
+                    wm_metrics_config,
+                    iter_num,
+                )
 
         if not wm_metrics_disabled and periodic_event(
             iter_num, cfg.validation.downstream_val_every, cfg.run.steps, include_0=False
@@ -396,6 +415,103 @@ def run_world_model_metrics(
     model.train()
     if is_distributed:
         dist.barrier()
+
+
+def run_local_rollout_trace(
+    cfg: DictConfig,
+    model: LatentWorldModel,
+    metrics_loader,
+    wm_metrics_config: WorldModelMetricsConfig,
+    iter_num: int,
+) -> None:
+    """Write one deterministic validation rollout locally without changing training RNG state.
+
+    The same first validation group, inference seed, and rollout settings are used at every
+    configured step, making the MP4s directly comparable over training. The trace is intentionally
+    independent of W&B and the expensive feature-metric stack.
+    """
+    distributed_settings = get_distributed_settings()
+    if not distributed_settings.is_main_process:
+        return
+
+    rollout_seed = int(cfg.validation.get("local_rollout_seed", 37))
+    python_state = random.getstate()
+    numpy_state = np.random.get_state()
+    cuda_devices = [torch.cuda.current_device()] if torch.cuda.is_available() else []
+    model.eval()
+    try:
+        with torch.random.fork_rng(devices=cuda_devices):
+            seed_everything(rollout_seed, deterministic=bool(cfg.run.get("deterministic", False)))
+            batch, metadata = next(iter(metrics_loader))
+            with torch.no_grad(), _autocast(model.device):
+                outputs = model.inference(
+                    batch,
+                    config=wm_metrics_config.inference,
+                    progress_bar=False,
+                )
+                viz_video = model.visualize(outputs)["viz_video"].cpu()
+    finally:
+        random.setstate(python_state)
+        np.random.set_state(numpy_state)
+        model.train()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    trace_dir = Path(cfg.run.output_dir) / "rollout_traces" / f"step-{iter_num:09d}"
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    video_path = trace_dir / "rollout.mp4"
+    temporary_video = trace_dir / "rollout.tmp.mp4"
+    write_video_ffmpeg(
+        temporary_video,
+        videos_to_grid(viz_video),
+        fps=model.config.video.fps,
+    )
+    temporary_video.replace(video_path)
+
+    metadata_payload = {
+        "schema": "mira-local-rollout-trace-v1",
+        "step": iter_num,
+        "seed": rollout_seed,
+        "split": cfg.dataset.get("test_split", "test"),
+        "training_group_mode": cfg.dataset.get("group_mode"),
+        "evaluation_group_mode": (cfg.dataset.get("validation_group_mode") or cfg.dataset.get("group_mode")),
+        "action_routing": getattr(model, "action_routing", None),
+        "n_context_frames": wm_metrics_config.n_context_frames,
+        "num_unrolled_frames": wm_metrics_config.num_unrolled_frames,
+        "schedule_type": wm_metrics_config.inference.schedule_type,
+        "noise_level": wm_metrics_config.inference.noise_level,
+        "video": str(video_path.relative_to(cfg.run.output_dir)),
+        "samples": [
+            {
+                "match_id": item.match_id,
+                "perspective": item.perspective,
+                "round_id": getattr(item, "round_id", None),
+                "sample_key": getattr(item, "sample_key", None),
+                "source_start_frame": getattr(
+                    item,
+                    "source_start_frame",
+                    item.frame_indices[0] if item.frame_indices else None,
+                ),
+            }
+            for item in metadata
+        ],
+    }
+    metadata_path = trace_dir / "metadata.json"
+    temporary_metadata = trace_dir / "metadata.json.tmp"
+    temporary_metadata.write_text(
+        json.dumps(metadata_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary_metadata.replace(metadata_path)
+    _log_jsonl(
+        cfg,
+        {
+            "kind": "rollout_trace",
+            "step": iter_num,
+            "seed": rollout_seed,
+            "path": str(video_path.relative_to(cfg.run.output_dir)),
+        },
+    )
 
 
 def _render_viz_sample(
