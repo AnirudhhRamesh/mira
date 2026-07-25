@@ -89,6 +89,10 @@ def test_summarize_uses_training_seed_as_independent_unit(tmp_path: Path) -> Non
     assert psnr["mean"] == 2.0
     assert result["independent_unit"] == "training_seed"
     assert result["arm_order_counts"]["synchronized,shuffled"] == 2
+    paired_action = result["paired_action_sensitivity"]["test/loss_total"]["zero"][
+        "training_seed_summary_of_eval_seed_means"
+    ]
+    assert paired_action["mean"] == 0.0
 
 
 def test_summarize_rejects_uncounterbalanced_order(tmp_path: Path) -> None:

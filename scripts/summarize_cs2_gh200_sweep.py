@@ -76,6 +76,15 @@ def summarize(root: Path) -> dict[str, Any]:
         raise ValueError(
             f"Training runs drifted in code or data: commits={commits}, manifests={manifests}"
         )
+    checkpoint_pairs = {
+        (
+            summary["contract"]["shuffled_checkpoint_sha256"],
+            summary["contract"]["synchronized_checkpoint_sha256"],
+        )
+        for summary in primary_summaries
+    }
+    if len(checkpoint_pairs) != len(training_seeds):
+        raise ValueError("A checkpoint pair was reused under more than one training seed")
     arm_orders = [tuple(audit["arm_order"]) for audit in audits]
     first_order = ("shuffled", "synchronized")
     second_order = ("synchronized", "shuffled")
@@ -153,6 +162,35 @@ def summarize(root: Path) -> dict[str, Any]:
                     ),
                 }
 
+    paired_action_use: dict[str, Any] = {}
+    action_metric_names = sorted(action_summaries[0]["arms"]["shuffled"])
+    for metric in action_metric_names:
+        paired_action_use[metric] = {}
+        for mode in ("batch-shifted", "time-shifted", "zero"):
+            differences = []
+            for summary in action_summaries:
+                shuffled = float(
+                    summary["arms"]["shuffled"][metric][mode][
+                        "paired_degradation_vs_true"
+                    ]["mean"]
+                )
+                synchronized = float(
+                    summary["arms"]["synchronized"][metric][mode][
+                        "paired_degradation_vs_true"
+                    ]["mean"]
+                )
+                differences.append(synchronized - shuffled)
+            paired_action_use[metric][mode] = {
+                "interpretation": (
+                    "positive means synchronized training increased loss sensitivity "
+                    "to this action intervention"
+                ),
+                "training_seed_summary_of_eval_seed_means": _summary(differences),
+                "per_training_seed": dict(
+                    zip(map(str, training_seeds), differences, strict=True)
+                ),
+            }
+
     return {
         "schema": "mira-cs2-gh200-sync-control-sweep-v1",
         "status": "pass",
@@ -167,6 +205,7 @@ def summarize(root: Path) -> dict[str, Any]:
         "evaluation_seeds_per_training_seed": primary_contract["seeds"],
         "primary": primary,
         "action_sensitivity": action,
+        "paired_action_sensitivity": paired_action_use,
     }
 
 
