@@ -543,6 +543,7 @@ def main() -> None:
             "map_slug": cfg.dataset.get("map_slug"),
             "group_mode": eval_group_mode,
             "training_group_mode": cfg.dataset.get("group_mode"),
+            "action_routing": getattr(model, "action_routing", None),
             "action_mode": args.action_mode,
             "window_mode": args.window_mode,
             "n_players": n_players,

@@ -157,6 +157,22 @@ printf '%s\n' \
   "frozen_loader_selection_sha256=$(sha256sum "$node_provenance/frozen_loader_selection.json" | cut -d' ' -f1)" \
   >"$node_provenance/launcher.env"
 
+telemetry_pid=
+stop_telemetry() {
+  if [[ -n "$telemetry_pid" ]]; then
+    kill "$telemetry_pid" 2>/dev/null || true
+    wait "$telemetry_pid" 2>/dev/null || true
+  fi
+}
+trap stop_telemetry EXIT
+nvidia-smi \
+  --query-gpu=timestamp,name,uuid,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw \
+  --format=csv \
+  --loop=5 \
+  >"$node_provenance/gpu_timeseries.csv" \
+  2>"$node_provenance/gpu_timeseries.log" &
+telemetry_pid=$!
+
 torchrun_args=(
   --nnodes "$nnodes"
   --nproc-per-node "$nproc_per_node"
@@ -202,6 +218,8 @@ for arm in "${arms[@]}"; do
     validation.val_first=true \
     validation.val_every=1000 \
     validation.val_n_samples=40 \
+    validation.local_rollout_every=1000 \
+    validation.local_rollout_seed=37 \
     validation.downstream_val_every=100000000 \
     optim.scheduler.warmup_steps=500 \
     optim.model_ema_decay=0.999 \

@@ -105,6 +105,7 @@ def test_summarize_supports_synchronized_vs_shuffled_training_control(tmp_path) 
                 payload = _payload("shared", mode, seed, loss)
                 payload["checkpoint_sha256"] = f"{arm}-checkpoint"
                 payload["training_group_mode"] = arm
+                payload["action_routing"] = "spatial"
                 (arm_dir / f"{mode}.json").write_text(json.dumps(payload))
 
     result = SUMMARY.summarize(
@@ -117,6 +118,7 @@ def test_summarize_supports_synchronized_vs_shuffled_training_control(tmp_path) 
         arm_b_n_players=10,
         arm_a_training_group_mode="shuffled",
         arm_b_training_group_mode="synchronized",
+        expected_action_routing="spatial",
     )
 
     assert result["contract"]["arm_a"] == "shuffled"

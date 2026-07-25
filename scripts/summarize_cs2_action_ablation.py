@@ -70,8 +70,17 @@ def _validate_arm_pair(
     arm_b_n_players: int,
     arm_a_training_group_mode: str,
     arm_b_training_group_mode: str,
+    expected_action_routing: str | None,
 ) -> None:
-    for field in ("split", "seed", "deterministic", "map_slug", "action_mode", "window_mode"):
+    for field in (
+        "split",
+        "seed",
+        "deterministic",
+        "map_slug",
+        "action_mode",
+        "window_mode",
+        "action_routing",
+    ):
         if arm_a.get(field) != arm_b.get(field):
             raise ValueError(
                 f"{source}: paired field {field!r} differs: "
@@ -102,6 +111,11 @@ def _validate_arm_pair(
         expected = (group_mode, training_group_mode, n_players)
         if observed != expected:
             raise ValueError(f"{source}: {arm} arm contract must be {expected}, got {observed}")
+        if expected_action_routing is not None and payload.get("action_routing") != expected_action_routing:
+            raise ValueError(
+                f"{source}: {arm} arm action_routing must be {expected_action_routing}, "
+                f"got {payload.get('action_routing')}"
+            )
     if not arm_a.get("deterministic"):
         raise ValueError(f"{source}: strict deterministic evaluation was not enabled")
     arm_a_rows = arm_a["validation"]["total_raw_pov_rows"]
@@ -126,6 +140,7 @@ def summarize(
     arm_b_n_players: int = 10,
     arm_a_training_group_mode: str = "single",
     arm_b_training_group_mode: str = "synchronized",
+    expected_action_routing: str | None = None,
 ) -> dict[str, Any]:
     seed_dirs = sorted(path for path in root.glob("seed_*") if path.is_dir())
     if not seed_dirs:
@@ -164,6 +179,7 @@ def summarize(
             arm_b_n_players=arm_b_n_players,
             arm_a_training_group_mode=arm_a_training_group_mode,
             arm_b_training_group_mode=arm_b_training_group_mode,
+            expected_action_routing=expected_action_routing,
         )
 
     seeds = [int(payload["seed"]) for payload in payloads[arm_a_name]["true"]]
@@ -210,6 +226,7 @@ def summarize(
             "seeds": seeds,
             "action_modes": list(ACTION_MODES),
             "window_mode": first["window_mode"],
+            "action_routing": first.get("action_routing"),
             "validation_raw_pov_rows_per_arm_per_seed": first["validation"]["total_raw_pov_rows"],
             f"{arm_a_name}_checkpoint_sha256": payloads[arm_a_name]["true"][0][
                 "checkpoint_sha256"
@@ -234,6 +251,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--arm-b-n-players", type=int, default=10)
     parser.add_argument("--arm-a-training-group-mode", default="single")
     parser.add_argument("--arm-b-training-group-mode", default="synchronized")
+    parser.add_argument("--expected-action-routing", default=None)
     return parser.parse_args()
 
 
@@ -250,6 +268,7 @@ def main() -> None:
         arm_b_n_players=args.arm_b_n_players,
         arm_a_training_group_mode=args.arm_a_training_group_mode,
         arm_b_training_group_mode=args.arm_b_training_group_mode,
+        expected_action_routing=args.expected_action_routing,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")

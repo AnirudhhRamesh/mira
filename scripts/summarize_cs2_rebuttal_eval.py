@@ -73,6 +73,7 @@ def _validate_pair(
     arm_b_n_players: int,
     arm_a_training_group_mode: str | None,
     arm_b_training_group_mode: str | None,
+    expected_action_routing: str | None,
 ) -> None:
     for field in (
         "split",
@@ -114,6 +115,11 @@ def _validate_pair(
                 f"{source}: {name} arm training_group_mode must be {training_group_mode}, "
                 f"got {payload.get('training_group_mode')}"
             )
+        if expected_action_routing is not None and payload.get("action_routing") != expected_action_routing:
+            raise ValueError(
+                f"{source}: {name} arm action_routing must be {expected_action_routing}, "
+                f"got {payload.get('action_routing')}"
+            )
     if not arm_a.get("deterministic"):
         raise ValueError(f"{source}: strict deterministic evaluation was not enabled")
     for phase in ("validation", "metrics"):
@@ -138,6 +144,7 @@ def summarize(
     arm_b_n_players: int = 10,
     arm_a_training_group_mode: str | None = None,
     arm_b_training_group_mode: str | None = None,
+    expected_action_routing: str | None = None,
 ) -> dict[str, Any]:
     seed_dirs = sorted(path for path in root.glob("seed_*") if path.is_dir())
     if not seed_dirs:
@@ -159,6 +166,7 @@ def summarize(
             arm_b_n_players=arm_b_n_players,
             arm_a_training_group_mode=arm_a_training_group_mode,
             arm_b_training_group_mode=arm_b_training_group_mode,
+            expected_action_routing=expected_action_routing,
         )
         arms[arm_a_name].append(arm_a)
         arms[arm_b_name].append(arm_b)
@@ -205,6 +213,7 @@ def summarize(
             "map_slug": first_arm_a["map_slug"],
             "dino_model": first_arm_a["dino_model"],
             "window_mode": first_arm_a["window_mode"],
+            "action_routing": first_arm_a.get("action_routing"),
             "deterministic": first_arm_a["deterministic"],
             "seeds": seeds,
             "validation_raw_pov_rows_per_seed": first_arm_a["validation"]["total_raw_pov_rows"],
@@ -234,6 +243,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--arm-b-n-players", type=int, default=10)
     parser.add_argument("--arm-a-training-group-mode", default=None)
     parser.add_argument("--arm-b-training-group-mode", default=None)
+    parser.add_argument("--expected-action-routing", default=None)
     return parser.parse_args()
 
 
@@ -250,6 +260,7 @@ def main() -> None:
         arm_b_n_players=args.arm_b_n_players,
         arm_a_training_group_mode=args.arm_a_training_group_mode,
         arm_b_training_group_mode=args.arm_b_training_group_mode,
+        expected_action_routing=args.expected_action_routing,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")

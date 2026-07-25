@@ -99,7 +99,9 @@ least three training seeds; counterbalance arm order across seeds.
 launcher also runs paired true, cross-POV-shifted, time-shifted, and zero-action diffusion-loss
 interventions for both arms on the same confirmatory windows and RNG seeds. Thus the primary
 quality comparison is accompanied by a direct conditioning-use check rather than treating visual
-metrics alone as evidence that either model uses player actions.
+metrics alone as evidence that either model uses player actions. Both training arms persist the
+same deterministic validation rollout every 1,000 steps for private review, and every node records
+five-second GPU utilization, memory, temperature, and power telemetry for the full timed run.
 
 ### Post-pilot action-routing amendment
 

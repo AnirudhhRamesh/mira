@@ -184,7 +184,8 @@ done
   --arm-a-n-players 10 \
   --arm-b-n-players 10 \
   --arm-a-training-group-mode shuffled \
-  --arm-b-training-group-mode synchronized
+  --arm-b-training-group-mode synchronized \
+  --expected-action-routing spatial
 
 "$python_bin" scripts/summarize_cs2_action_ablation.py "$action_eval_root" \
   --arm-a shuffled \
@@ -194,4 +195,5 @@ done
   --arm-a-n-players 10 \
   --arm-b-n-players 10 \
   --arm-a-training-group-mode shuffled \
-  --arm-b-training-group-mode synchronized
+  --arm-b-training-group-mode synchronized \
+  --expected-action-routing spatial
