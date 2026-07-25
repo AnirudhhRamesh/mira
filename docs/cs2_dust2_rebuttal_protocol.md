@@ -75,6 +75,38 @@ single-POV baseline, all future confirmatory shared models, and every paper-faci
 evaluation use the corrected adapter. This correction was committed before any new confirmatory
 model was trained or evaluated.
 
+### Fresh single-MIRA endpoint (frozen 2026-07-25 UTC)
+
+The corrected single-POV MIRA baseline is retrained from scratch before any model reads the
+untouched 690-POV test split. It uses the unchanged public MIRA codec and single-world-model
+architectures plus only the dataset/action adapter described above.
+
+- A fresh codec is trained on `train` only through optimizer step 18,000, with seed 28, batch size
+  4, strict deterministic kernels, no compilation, and validation-only checks every 6,000 steps.
+  The endpoint is fixed by step count, not validation or test quality.
+- A fresh single-POV world model is trained on `train` only through optimizer step 15,000, with
+  seed 28, batch size 10, the native action encoder and normalization, strict deterministic
+  kernels, no compilation, and EMA decay 0.999. Fixed validation loss and one fixed-seed rollout
+  are recorded every 1,000 steps on `val`; no test row is available to training or stopping.
+- The exact confirmatory manifest and provenance SHA-256 values are
+  `33abbb623072932431871a612620110c473d4b664c52010e5763c273c6daf10e` and
+  `3f6419f9414576c88773874c8009c0814e827186c8782831cc373a27be70c2ef`.
+- After the step-15,000 checkpoint is atomically present, evaluate all 69 test rounds / 690 POV
+  rows at both midpoint and first-death windows with evaluation seeds 37, 41, and 43. The same
+  videos and diffusion RNG are scored under true, next-round same-POV-slot, half-clip
+  time-shifted, and zero actions.
+- The next-round intervention replaces a receiver round's complete ten-POV action sequences with
+  the next different round while leaving receiver videos and POV ordering unchanged. Results are
+  retained per round. Confidence intervals resample 69 round clusters and keep the three
+  evaluation-seed repeats within each selected cluster; evaluation seeds are not called
+  independent model replicates.
+
+This short endpoint is a resource-constrained baseline fixed before its test evaluation. It is not
+presented as a converged MIRA scaling result. Diffusion-loss sensitivity is a direct check that the
+trained model uses aligned action conditioning, while generated action adherence is evaluated
+separately with the common temporal action-recognition and optical-flow suite. Pixel MSE and
+Frechet appearance metrics are secondary and cannot by themselves establish action adherence.
+
 ## Pilot question: single versus shared MIRA
 
 Question: under an equal GPU wall-clock budget, does a ten-POV shared MIRA baseline trained on
