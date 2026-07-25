@@ -92,6 +92,7 @@ def test_world_model_metrics_config_instantiates() -> None:
     assert wm_config.num_unrolled_frames == 20
     assert wm_config.drift_metric_frames == 20
     assert wm_config.fdd_slice_frames == 10
+    assert wm_config.dino_model == "dinov3_vitb16"
     assert wm_config.inference.schedule_type == "linear"
     assert wm_config.inference.noise_level == 0.0
 
