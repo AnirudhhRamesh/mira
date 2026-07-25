@@ -207,6 +207,14 @@ must remain visibly separated from it.
 
 ## Loader systems gate
 
+The training path uses MIRA's `CounterStrike1KIterable`, not
+`cs2_clean.datasets.CS2Dataset`. Both read the same materialized MP4/action payloads and use
+TorchCodec, but the classes do not implement the same experimental unit. The `cs2_clean` map-style
+loader enumerates overlapping per-POV windows; MIRA samples complete rounds, keeps all ten POVs
+contiguous and player-ordered, constructs the shuffled matched-information control, and performs
+the preregistered 32-to-8-fps action reduction. Substituting the class is therefore not a
+semantics-preserving loader optimization.
+
 The G7e pilot remains fixed at four TorchCodec CPU workers in both arms. It is not restarted or
 mutated after observing partial training curves. Before confirmatory GH200 runs, execute
 `scripts/bench_cs2_dataloader.py` on the target node type using the exact model-facing batch:
