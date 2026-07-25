@@ -253,6 +253,7 @@ or copying from a live training volume.
 - Unattended final certification guard: `scripts/watch_cs2_rebuttal_audit.sh`
 - GH200 matched control: `scripts/run_cs2_gh200_sync_control.sh`
 - GH200 held-out evaluation: `scripts/run_cs2_gh200_sync_control_eval.sh`
+- GH200 completed-run audit: `scripts/audit_cs2_gh200_sync_control.py`
 - Completed pilot audit: `scripts/audit_cs2_rebuttal_run.py`
 
 Every launcher records the code commit/status/patch, resolved Hydra configuration, dataset
@@ -267,3 +268,9 @@ evaluation guards verify. The pilot run additionally records
 five-second `nvidia-smi` telemetry for peak-memory
 disclosure; because telemetry was enabled after the first single-arm checkpoint, single-arm peak
 memory from that trace is explicitly labeled as partial, while the shared arm is fully covered.
+
+The GH200 evaluator ends by running its separate fail-closed auditor. It verifies the exact
+four-node/one-GPU topology, GH200 identity, common clean commit, repeated frozen loader selection,
+per-node telemetry, 640 global model-facing frames per optimizer step, equal wall-clock limits,
+spatial routing, fixed validation-rollout cadence, final checkpoint hashes, all 69 untouched test
+rounds (690 POV rows), five evaluation seeds, and all four paired action interventions.
