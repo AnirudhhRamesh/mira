@@ -93,3 +93,36 @@ def test_summarize_action_ablation_rejects_arm_seed_mismatch(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="paired field 'seed' differs"):
         SUMMARY.summarize(tmp_path)
+
+
+def test_summarize_supports_synchronized_vs_shuffled_training_control(tmp_path) -> None:
+    losses = {"true": 1.0, "batch-shifted": 1.2, "time-shifted": 1.3, "zero": 1.4}
+    for seed in (37, 38):
+        for arm in ("shuffled", "synchronized"):
+            arm_dir = tmp_path / f"seed_{seed}" / arm
+            arm_dir.mkdir(parents=True)
+            for mode, loss in losses.items():
+                payload = _payload("shared", mode, seed, loss)
+                payload["checkpoint_sha256"] = f"{arm}-checkpoint"
+                payload["training_group_mode"] = arm
+                (arm_dir / f"{mode}.json").write_text(json.dumps(payload))
+
+    result = SUMMARY.summarize(
+        tmp_path,
+        arm_a_name="shuffled",
+        arm_b_name="synchronized",
+        arm_a_eval_group_mode="synchronized",
+        arm_b_eval_group_mode="synchronized",
+        arm_a_n_players=10,
+        arm_b_n_players=10,
+        arm_a_training_group_mode="shuffled",
+        arm_b_training_group_mode="synchronized",
+    )
+
+    assert result["contract"]["arm_a"] == "shuffled"
+    assert result["contract"]["arm_b"] == "synchronized"
+    assert result["contract"]["shuffled_checkpoint_sha256"] == "shuffled-checkpoint"
+    degradation = result["arms"]["synchronized"]["test/loss_total"]["zero"][
+        "paired_degradation_vs_true"
+    ]
+    assert degradation["mean"] == pytest.approx(0.4)

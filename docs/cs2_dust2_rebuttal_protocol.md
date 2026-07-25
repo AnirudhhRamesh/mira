@@ -95,7 +95,11 @@ on shuffled groups would change the estimand and is prohibited. During training,
 metrics onto the same synchronized held-out task; only the training loader grouping differs. Run at
 least three training seeds; counterbalance arm order across seeds.
 `scripts/run_cs2_gh200_sync_control.sh` runs one seed and accepts an explicit arm order, while
-`scripts/run_cs2_gh200_sync_control_eval.sh` forces synchronized test grouping.
+`scripts/run_cs2_gh200_sync_control_eval.sh` forces synchronized test grouping. The held-out
+launcher also runs paired true, cross-POV-shifted, time-shifted, and zero-action diffusion-loss
+interventions for both arms on the same confirmatory windows and RNG seeds. Thus the primary
+quality comparison is accompanied by a direct conditioning-use check rather than treating visual
+metrics alone as evidence that either model uses player actions.
 
 ### Post-pilot action-routing amendment
 
