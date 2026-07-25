@@ -254,6 +254,7 @@ or copying from a live training volume.
 - GH200 matched control: `scripts/run_cs2_gh200_sync_control.sh`
 - GH200 held-out evaluation: `scripts/run_cs2_gh200_sync_control_eval.sh`
 - GH200 completed-run audit: `scripts/audit_cs2_gh200_sync_control.py`
+- GH200 training-seed aggregate: `scripts/summarize_cs2_gh200_sweep.py`
 - Completed pilot audit: `scripts/audit_cs2_rebuttal_run.py`
 
 Every launcher records the code commit/status/patch, resolved Hydra configuration, dataset
@@ -274,3 +275,7 @@ four-node/one-GPU topology, GH200 identity, common clean commit, repeated frozen
 per-node telemetry, 640 global model-facing frames per optimizer step, equal wall-clock limits,
 spatial routing, fixed validation-rollout cadence, final checkpoint hashes, all 69 untouched test
 rounds (690 POV rows), five evaluation seeds, and all four paired action interventions.
+After at least three child audits pass, the sweep summarizer requires counterbalanced arm order and
+common code/data provenance, then aggregates each nested evaluation-seed mean across training
+seeds. The reported independent unit is therefore the training seed; diffusion evaluation seeds
+are not incorrectly promoted to independent replications.
