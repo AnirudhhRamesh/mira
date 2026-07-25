@@ -26,6 +26,10 @@ EXPECTED_SPLITS = {
     "pilot_test": {"matches": 3, "rounds": 52, "pov_rows": 520},
 }
 GLOBAL_FRAMES_PER_STEP = 4 * 1 * 10 * 16
+GLOBAL_LOADER_SELECTION_RULE = (
+    "maximize the minimum synchronized/shuffled across-repeat mean input FPS; "
+    "prefer fewer workers on an exact tie"
+)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -65,8 +69,7 @@ def _finite_results(payload: dict[str, Any], path: Path) -> None:
     if not isinstance(results, dict) or not results:
         raise ValueError(f"{path}: missing results")
     if any(
-        not isinstance(value, (int, float)) or not math.isfinite(float(value))
-        for value in results.values()
+        not isinstance(value, (int, float)) or not math.isfinite(float(value)) for value in results.values()
     ):
         raise ValueError(f"{path}: results contain non-finite values")
 
@@ -123,6 +126,8 @@ class Auditor:
         commits: set[str] = set()
         launchers: list[dict[str, str]] = []
         loader_configs: list[dict[str, Any]] = []
+        global_loader_hashes: list[str] = []
+        hostnames: list[str] = []
         for rank, node in enumerate(node_roots):
             commit = (node / "code_commit.txt").read_text(encoding="utf-8").strip()
             commits.add(commit)
@@ -142,7 +147,39 @@ class Auditor:
             self.require(f"node_{rank}.telemetry", len(telemetry) >= 2, len(telemetry))
             launcher = _read_env(node / "launcher.env")
             launchers.append(launcher)
+            hostname = launcher["hostname"]
+            hostnames.append(hostname)
+            self.require(
+                f"node_{rank}.rank_identity",
+                launcher["node_rank"] == launcher["slurm_procid"] == launcher["slurm_nodeid"] == str(rank),
+                {
+                    "node_rank": launcher["node_rank"],
+                    "slurm_procid": launcher["slurm_procid"],
+                    "slurm_nodeid": launcher["slurm_nodeid"],
+                },
+            )
+            self.require(
+                f"node_{rank}.scheduler",
+                launcher["scheduler"] == "slurm"
+                and bool(launcher["slurm_job_id"])
+                and bool(launcher["slurm_job_nodelist"]),
+                {
+                    "scheduler": launcher["scheduler"],
+                    "job_id": launcher["slurm_job_id"],
+                    "nodelist": launcher["slurm_job_nodelist"],
+                },
+            )
+            self.require(
+                f"node_{rank}.one_visible_gh200",
+                launcher["visible_gpu_count"] == "1" and "gh200" in launcher["visible_gpu_name"].lower(),
+                {
+                    "count": launcher["visible_gpu_count"],
+                    "name": launcher["visible_gpu_name"],
+                },
+            )
             loader = _read_json(node / "frozen_loader_selection.json")
+            benchmark_inputs = loader.get("benchmark_inputs", [])
+            host_repeat_counts = loader.get("benchmark_host_repeat_counts", {})
             self.require(f"node_{rank}.loader_status", loader.get("status") == "pass", loader.get("status"))
             self.require(
                 f"node_{rank}.loader_commit",
@@ -154,9 +191,111 @@ class Auditor:
                 loader.get("expected_gpu_substring") == "GH200",
                 loader.get("expected_gpu_substring"),
             )
-            loader_configs.append(loader["selected_config"])
+            self.require(
+                f"node_{rank}.loader_hostname",
+                loader.get("expected_hostname") == hostname
+                and len(benchmark_inputs) >= 3
+                and host_repeat_counts.get(hostname) == len(benchmark_inputs)
+                and all(item.get("hostname") == hostname for item in benchmark_inputs),
+                {
+                    "expected_hostname": loader.get("expected_hostname"),
+                    "host_repeat_counts": host_repeat_counts,
+                    "benchmark_input_count": len(benchmark_inputs),
+                },
+            )
+            self.require(
+                f"node_{rank}.loader_manifest",
+                loader.get("expected_manifest_sha256") == EXPECTED_MANIFEST_SHA256
+                and all(item.get("manifest_sha256") == EXPECTED_MANIFEST_SHA256 for item in benchmark_inputs),
+                loader.get("expected_manifest_sha256"),
+            )
+            selected_config = loader["selected_config"]
+            loader_configs.append(selected_config)
+
+            global_loader_path = node / "global_loader_selection.json"
+            global_loader = _read_json(global_loader_path)
+            global_loader_hash = _sha256(global_loader_path)
+            global_loader_hashes.append(global_loader_hash)
+            global_host_counts = global_loader.get("benchmark_host_repeat_counts", {})
+            global_inputs = global_loader.get("benchmark_inputs", [])
+            global_selection_evidence = global_loader.get("selection_evidence", {})
+            self.require(
+                f"node_{rank}.global_loader_selection_hash",
+                launcher["global_loader_selection_sha256"] == global_loader_hash,
+                {
+                    "launcher": launcher["global_loader_selection_sha256"],
+                    "actual": global_loader_hash,
+                },
+            )
+            self.require(
+                f"node_{rank}.global_loader_contract",
+                global_loader.get("schema") == "mira-cs2-frozen-loader-selection-v1"
+                and global_loader.get("status") == "pass"
+                and global_loader.get("expected_git_commit") == commit
+                and global_loader.get("expected_manifest_sha256") == EXPECTED_MANIFEST_SHA256
+                and global_loader.get("expected_hostname") is None,
+                {
+                    "schema": global_loader.get("schema"),
+                    "status": global_loader.get("status"),
+                    "commit": global_loader.get("expected_git_commit"),
+                    "manifest": global_loader.get("expected_manifest_sha256"),
+                    "hostname": global_loader.get("expected_hostname"),
+                },
+            )
+            self.require(
+                f"node_{rank}.global_loader_hosts",
+                len(global_host_counts) == 4
+                and set(hostnames).issubset(global_host_counts)
+                and all(count >= 3 for count in global_host_counts.values())
+                and len(global_inputs) == sum(global_host_counts.values())
+                and all(
+                    sum(item.get("hostname") == hostname for item in global_inputs) == count
+                    for hostname, count in global_host_counts.items()
+                )
+                and all(item.get("manifest_sha256") == EXPECTED_MANIFEST_SHA256 for item in global_inputs),
+                {
+                    "host_repeat_counts": global_host_counts,
+                    "benchmark_input_count": len(global_inputs),
+                },
+            )
+            self.require(
+                f"node_{rank}.global_loader_selected_config",
+                global_loader.get("selected_config") == selected_config,
+                {
+                    "global": global_loader.get("selected_config"),
+                    "local": selected_config,
+                },
+            )
+            self.require(
+                f"node_{rank}.global_loader_selection_rule",
+                global_selection_evidence.get("rule") == GLOBAL_LOADER_SELECTION_RULE
+                and global_selection_evidence.get("selected_num_workers")
+                == selected_config.get("num_workers"),
+                global_selection_evidence,
+            )
 
         self.require("code.single_commit", len(commits) == 1, sorted(commits))
+        self.require(
+            "topology.distinct_hostnames",
+            len(set(hostnames)) == 4,
+            hostnames,
+        )
+        self.require(
+            "loader.identical_global_selection",
+            len(set(global_loader_hashes)) == 1,
+            global_loader_hashes,
+        )
+        self.require(
+            "loader.global_hosts_match_allocation",
+            set(_read_json(node_roots[0] / "global_loader_selection.json")["benchmark_host_repeat_counts"])
+            == set(hostnames),
+            {
+                "benchmarked": sorted(
+                    _read_json(node_roots[0] / "global_loader_selection.json")["benchmark_host_repeat_counts"]
+                ),
+                "allocated": sorted(hostnames),
+            },
+        )
         commit = next(iter(commits))
         if self.expected_training_commit is not None:
             self.require(
@@ -175,6 +314,11 @@ class Auditor:
             "arm_order",
             "nnodes",
             "nproc_per_node",
+            "master_addr",
+            "master_port",
+            "scheduler",
+            "slurm_job_id",
+            "slurm_job_nodelist",
             "manifest_sha256",
             "split_provenance_sha256",
             "action_routing",
@@ -182,6 +326,7 @@ class Auditor:
             "dataloader_prefetch_factor",
             "dataloader_persistent_workers",
             "dataloader_pin_memory",
+            "global_loader_selection_sha256",
         )
         self.require(
             "launcher.same_contract_all_nodes",
@@ -236,9 +381,7 @@ class Auditor:
         ]
         self.require("pipeline.status", observed == expected, observed)
 
-    def audit_training(
-        self, seed: int, loader_config: dict[str, Any]
-    ) -> dict[str, dict[str, Any]]:
+    def audit_training(self, seed: int, loader_config: dict[str, Any]) -> dict[str, dict[str, Any]]:
         results: dict[str, dict[str, Any]] = {}
         arm_configs: dict[str, dict[str, Any]] = {}
         for arm in ARMS:
@@ -312,9 +455,7 @@ class Auditor:
                 self.arm_hours * 3600 <= elapsed <= self.arm_hours * 3600 + 30,
                 elapsed,
             )
-            expected_trace_steps = {
-                int(row["step"]) for row in validations if int(row["step"]) % 1000 == 0
-            }
+            expected_trace_steps = {int(row["step"]) for row in validations if int(row["step"]) % 1000 == 0}
             observed_trace_steps = {int(row["step"]) for row in traces}
             self.require(
                 f"{arm}.rollout_cadence",
@@ -370,8 +511,7 @@ class Auditor:
         provenance = root / "provenance"
         self.require(
             f"{root.name}.evaluator_commit",
-            (provenance / "evaluator_code_commit.txt").read_text(encoding="utf-8").strip()
-            == training_commit,
+            (provenance / "evaluator_code_commit.txt").read_text(encoding="utf-8").strip() == training_commit,
             (provenance / "evaluator_code_commit.txt").read_text(encoding="utf-8").strip(),
         )
         self.require(
@@ -385,14 +525,102 @@ class Auditor:
             (provenance / "evaluator_code.patch").stat().st_size,
         )
 
+    def _audit_action_evaluation(
+        self,
+        root: Path,
+        *,
+        label: str,
+        window_mode: str,
+        training_commit: str,
+        checkpoint_hashes: dict[str, str],
+    ) -> str:
+        self._audit_eval_provenance(root, training_commit)
+        recorded_window = (root / "provenance" / "window_mode.txt").read_text(encoding="utf-8").strip()
+        self.require(
+            f"{label}.provenance.window_mode",
+            recorded_window == window_mode,
+            recorded_window,
+        )
+        summary = _read_json(root / "summary.json")
+        expected_contract = {
+            "arm_a": "shuffled",
+            "arm_b": "synchronized",
+            "split": "test",
+            "map_slug": "dust2",
+            "deterministic": True,
+            "seeds": list(EVAL_SEEDS),
+            "action_modes": list(ACTION_MODES),
+            "window_mode": window_mode,
+            "action_routing": "spatial",
+            "validation_raw_pov_rows_per_arm_per_seed": 690,
+            "shuffled_checkpoint_sha256": checkpoint_hashes["shuffled"],
+            "synchronized_checkpoint_sha256": checkpoint_hashes["synchronized"],
+        }
+        for key, value in expected_contract.items():
+            self.require(
+                f"{label}.contract.{key}",
+                summary["contract"].get(key) == value,
+                summary["contract"].get(key),
+            )
+        result_paths = sorted(root.glob("seed_*/*/*.json"))
+        self.require(f"{label}.result_count", len(result_paths) == 40, len(result_paths))
+        for path in result_paths:
+            payload = _read_json(path)
+            _finite_results(payload, path)
+            arm = path.parent.name
+            seed = int(path.parent.parent.name.removeprefix("seed_"))
+            mode = path.stem
+            self.require(
+                f"{label}.{path.parent.parent.name}.{arm}.{mode}.membership",
+                arm in ARMS and seed in EVAL_SEEDS and mode in ACTION_MODES,
+                [arm, seed, mode],
+            )
+            identity = (
+                payload.get("split"),
+                payload.get("seed"),
+                payload.get("deterministic"),
+                payload.get("map_slug"),
+                payload.get("group_mode"),
+                payload.get("training_group_mode"),
+                payload.get("n_players"),
+                payload.get("action_routing"),
+                payload.get("window_mode"),
+                payload.get("action_mode"),
+                payload.get("checkpoint_sha256"),
+            )
+            expected = (
+                "test",
+                seed,
+                True,
+                "dust2",
+                "synchronized",
+                arm,
+                10,
+                "spatial",
+                window_mode,
+                mode,
+                checkpoint_hashes[arm],
+            )
+            self.require(
+                f"{label}.{path.parent.parent.name}.{arm}.{mode}.identity",
+                identity == expected,
+                identity,
+            )
+            self.require(
+                f"{label}.{path.parent.parent.name}.{arm}.{mode}.rows",
+                payload["validation"]["total_raw_pov_rows"] == 690,
+                payload["validation"],
+            )
+        return str(root / "summary.json")
+
     def audit_evaluation(
         self, training_commit: str, checkpoints: dict[str, dict[str, Any]]
     ) -> dict[str, str]:
         primary = self.root / "evaluation" / "synchronized_test_seed_sweep"
         action = self.root / "evaluation" / "synchronized_test_action_loss_seed_sweep"
+        death_action = self.root / "evaluation" / "synchronized_test_first_death_action_loss_seed_sweep"
         checkpoint_hashes = {arm: checkpoints[arm]["checkpoint_sha256"] for arm in ARMS}
         self._audit_eval_provenance(primary, training_commit)
-        self._audit_eval_provenance(action, training_commit)
 
         primary_summary = _read_json(primary / "summary.json")
         expected_primary = {
@@ -461,77 +689,24 @@ class Auditor:
                 [payload["validation"], payload["metrics"]],
             )
 
-        action_summary = _read_json(action / "summary.json")
-        expected_action = {
-            "arm_a": "shuffled",
-            "arm_b": "synchronized",
-            "split": "test",
-            "map_slug": "dust2",
-            "deterministic": True,
-            "seeds": list(EVAL_SEEDS),
-            "action_modes": list(ACTION_MODES),
-            "window_mode": "midpoint",
-            "action_routing": "spatial",
-            "validation_raw_pov_rows_per_arm_per_seed": 690,
-            "shuffled_checkpoint_sha256": checkpoint_hashes["shuffled"],
-            "synchronized_checkpoint_sha256": checkpoint_hashes["synchronized"],
-        }
-        for key, value in expected_action.items():
-            self.require(
-                f"action.contract.{key}",
-                action_summary["contract"].get(key) == value,
-                action_summary["contract"].get(key),
-            )
-        action_paths = sorted(action.glob("seed_*/*/*.json"))
-        self.require("action.result_count", len(action_paths) == 40, len(action_paths))
-        for path in action_paths:
-            payload = _read_json(path)
-            _finite_results(payload, path)
-            arm = path.parent.name
-            seed = int(path.parent.parent.name.removeprefix("seed_"))
-            mode = path.stem
-            self.require(
-                f"action.{path.parent.parent.name}.{arm}.{mode}.membership",
-                arm in ARMS and seed in EVAL_SEEDS and mode in ACTION_MODES,
-                [arm, seed, mode],
-            )
-            identity = (
-                payload.get("split"),
-                payload.get("seed"),
-                payload.get("deterministic"),
-                payload.get("map_slug"),
-                payload.get("group_mode"),
-                payload.get("training_group_mode"),
-                payload.get("n_players"),
-                payload.get("action_routing"),
-                payload.get("action_mode"),
-                payload.get("checkpoint_sha256"),
-            )
-            expected = (
-                "test",
-                seed,
-                True,
-                "dust2",
-                "synchronized",
-                arm,
-                10,
-                "spatial",
-                mode,
-                checkpoint_hashes[arm],
-            )
-            self.require(
-                f"action.{path.parent.parent.name}.{arm}.{mode}.identity",
-                identity == expected,
-                identity,
-            )
-            self.require(
-                f"action.{path.parent.parent.name}.{arm}.{mode}.rows",
-                payload["validation"]["total_raw_pov_rows"] == 690,
-                payload["validation"],
-            )
+        action_summary = self._audit_action_evaluation(
+            action,
+            label="action",
+            window_mode="midpoint",
+            training_commit=training_commit,
+            checkpoint_hashes=checkpoint_hashes,
+        )
+        death_action_summary = self._audit_action_evaluation(
+            death_action,
+            label="death_action",
+            window_mode="first-death",
+            training_commit=training_commit,
+            checkpoint_hashes=checkpoint_hashes,
+        )
         return {
             "primary_summary": str(primary / "summary.json"),
-            "action_summary": str(action / "summary.json"),
+            "action_summary": action_summary,
+            "first_death_action_summary": death_action_summary,
         }
 
     def run(self) -> dict[str, Any]:

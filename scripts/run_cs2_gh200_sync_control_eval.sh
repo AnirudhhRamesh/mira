@@ -13,6 +13,7 @@ split_provenance=${CS1K_CONFIRMATORY_SPLIT_PROVENANCE:?Set the frozen split prov
 python_bin=${MIRA_PYTHON:-$project_dir/.pixi/envs/default/bin/python}
 eval_root=${CS1K_EVAL_ROOT:-$training_root/evaluation/synchronized_test_seed_sweep}
 action_eval_root=${CS1K_ACTION_EVAL_ROOT:-$training_root/evaluation/synchronized_test_action_loss_seed_sweep}
+death_action_eval_root=${CS1K_DEATH_ACTION_EVAL_ROOT:-$training_root/evaluation/synchronized_test_first_death_action_loss_seed_sweep}
 eval_seeds=${CS1K_EVAL_SEEDS:-"37 38 39 40 41"}
 action_modes=${CS1K_ACTION_MODES:-"true batch-shifted time-shifted zero"}
 
@@ -114,19 +115,26 @@ for arm, checkpoint in zip(("shuffled", "synchronized"), sys.argv[2:], strict=Tr
 print(json.dumps({"verified": True, "checkpoints": result}, indent=2, sort_keys=True))
 PY
 
-mkdir -p "$action_eval_root/provenance"
-printf '%s\n' "$shuffled_checkpoint" >"$action_eval_root/provenance/shuffled_checkpoint.txt"
-printf '%s\n' "$synchronized_checkpoint" >"$action_eval_root/provenance/synchronized_checkpoint.txt"
-sha256sum "$shuffled_checkpoint" "$synchronized_checkpoint" \
-  >"$action_eval_root/provenance/checkpoints.sha256"
-git rev-parse HEAD >"$action_eval_root/provenance/evaluator_code_commit.txt"
-git status --porcelain=v1 >"$action_eval_root/provenance/evaluator_code_status.txt"
-git diff --binary >"$action_eval_root/provenance/evaluator_code.patch"
-printf '%s\n' "$eval_seeds" >"$action_eval_root/provenance/seeds.txt"
-printf '%s\n' "$action_modes" >"$action_eval_root/provenance/action_modes.txt"
-printf '%s\n' "$test_rounds" >"$action_eval_root/provenance/test_rounds.txt"
-sha256sum "$manifest_path" "$split_provenance" \
-  >"$action_eval_root/provenance/confirmatory_split_files.sha256"
+write_action_provenance() {
+  local root=$1
+  local window_mode=$2
+  mkdir -p "$root/provenance"
+  printf '%s\n' "$shuffled_checkpoint" >"$root/provenance/shuffled_checkpoint.txt"
+  printf '%s\n' "$synchronized_checkpoint" >"$root/provenance/synchronized_checkpoint.txt"
+  sha256sum "$shuffled_checkpoint" "$synchronized_checkpoint" \
+    >"$root/provenance/checkpoints.sha256"
+  git rev-parse HEAD >"$root/provenance/evaluator_code_commit.txt"
+  git status --porcelain=v1 >"$root/provenance/evaluator_code_status.txt"
+  git diff --binary >"$root/provenance/evaluator_code.patch"
+  printf '%s\n' "$eval_seeds" >"$root/provenance/seeds.txt"
+  printf '%s\n' "$action_modes" >"$root/provenance/action_modes.txt"
+  printf '%s\n' "$test_rounds" >"$root/provenance/test_rounds.txt"
+  printf '%s\n' "$window_mode" >"$root/provenance/window_mode.txt"
+  sha256sum "$manifest_path" "$split_provenance" \
+    >"$root/provenance/confirmatory_split_files.sha256"
+}
+write_action_provenance "$action_eval_root" midpoint
+write_action_provenance "$death_action_eval_root" first-death
 
 for seed in $eval_seeds; do
   seed_dir=$eval_root/seed_$seed
@@ -173,6 +181,24 @@ for seed in $eval_seeds; do
         --results-json "$action_arm_dir/$action_mode.json" \
         2>&1 | tee "$action_arm_dir/$action_mode.log"
     done
+
+    death_action_arm_dir=$death_action_eval_root/seed_$seed/$arm
+    mkdir -p "$death_action_arm_dir"
+    for action_mode in $action_modes; do
+      "$python_bin" scripts/eval_world_model_offline.py "$checkpoint" \
+        --split test \
+        --group-mode synchronized \
+        --window-mode first-death \
+        --action-mode "$action_mode" \
+        --seed "$seed" \
+        --deterministic \
+        --dino-model dinov2_vitb14 \
+        --val-n-samples "$test_rounds" \
+        --skip-metrics \
+        --no-compile \
+        --results-json "$death_action_arm_dir/$action_mode.json" \
+        2>&1 | tee "$death_action_arm_dir/$action_mode.log"
+    done
   done
 done
 
@@ -188,6 +214,17 @@ done
   --expected-action-routing spatial
 
 "$python_bin" scripts/summarize_cs2_action_ablation.py "$action_eval_root" \
+  --arm-a shuffled \
+  --arm-b synchronized \
+  --arm-a-eval-group-mode synchronized \
+  --arm-b-eval-group-mode synchronized \
+  --arm-a-n-players 10 \
+  --arm-b-n-players 10 \
+  --arm-a-training-group-mode shuffled \
+  --arm-b-training-group-mode synchronized \
+  --expected-action-routing spatial
+
+"$python_bin" scripts/summarize_cs2_action_ablation.py "$death_action_eval_root" \
   --arm-a shuffled \
   --arm-b synchronized \
   --arm-a-eval-group-mode synchronized \

@@ -27,8 +27,10 @@ def _write_seed(root: Path, seed: int, order: tuple[str, str], delta: float) -> 
     seed_root = root / f"seed_{seed}"
     primary_root = seed_root / "evaluation" / "synchronized_test_seed_sweep"
     action_root = seed_root / "evaluation" / "synchronized_test_action_loss_seed_sweep"
+    death_action_root = seed_root / "evaluation" / "synchronized_test_first_death_action_loss_seed_sweep"
     primary_root.mkdir(parents=True)
     action_root.mkdir(parents=True)
+    death_action_root.mkdir(parents=True)
     audit = {
         "schema": "mira-cs2-gh200-sync-control-audit-v1",
         "status": "pass",
@@ -44,6 +46,7 @@ def _write_seed(root: Path, seed: int, order: tuple[str, str], delta: float) -> 
             "arm_b": "synchronized",
             "split": "test",
             "seeds": [37, 38, 39, 40, 41],
+            "window_mode": "midpoint",
             "shuffled_checkpoint_sha256": f"shuffled-{seed}",
             "synchronized_checkpoint_sha256": f"synchronized-{seed}",
         },
@@ -69,12 +72,19 @@ def _write_seed(root: Path, seed: int, order: tuple[str, str], delta: float) -> 
             "arm_b": "synchronized",
             "split": "test",
             "seeds": [37, 38, 39, 40, 41],
+            "window_mode": "midpoint",
             "shuffled_checkpoint_sha256": f"shuffled-{seed}",
             "synchronized_checkpoint_sha256": f"synchronized-{seed}",
         },
         "arms": arms,
     }
     (action_root / "summary.json").write_text(json.dumps(action), encoding="utf-8")
+    death_action = json.loads(json.dumps(action))
+    death_action["contract"]["window_mode"] = "first-death"
+    (death_action_root / "summary.json").write_text(
+        json.dumps(death_action),
+        encoding="utf-8",
+    )
 
 
 def test_summarize_uses_training_seed_as_independent_unit(tmp_path: Path) -> None:
@@ -93,6 +103,10 @@ def test_summarize_uses_training_seed_as_independent_unit(tmp_path: Path) -> Non
         "training_seed_summary_of_eval_seed_means"
     ]
     assert paired_action["mean"] == 0.0
+    paired_death_action = result["paired_first_death_action_sensitivity"]["test/loss_total"]["zero"][
+        "training_seed_summary_of_eval_seed_means"
+    ]
+    assert paired_death_action["mean"] == 0.0
 
 
 def test_summarize_rejects_uncounterbalanced_order(tmp_path: Path) -> None:

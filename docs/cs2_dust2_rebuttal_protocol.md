@@ -97,11 +97,12 @@ least three training seeds; counterbalance arm order across seeds.
 `scripts/run_cs2_gh200_sync_control.sh` runs one seed and accepts an explicit arm order, while
 `scripts/run_cs2_gh200_sync_control_eval.sh` forces synchronized test grouping. The held-out
 launcher also runs paired true, cross-POV-shifted, time-shifted, and zero-action diffusion-loss
-interventions for both arms on the same confirmatory windows and RNG seeds. Thus the primary
-quality comparison is accompanied by a direct conditioning-use check rather than treating visual
-metrics alone as evidence that either model uses player actions. Both training arms persist the
-same deterministic validation rollout every 1,000 steps for private review, and every node records
-five-second GPU utilization, memory, temperature, and power telemetry for the full timed run.
+interventions for both arms on the same confirmatory midpoint and first-death windows and RNG
+seeds. Thus the primary quality comparison is accompanied by direct conditioning-use checks in
+ordinary and combat/death context rather than treating visual metrics alone as evidence that
+either model uses player actions. Both training arms persist the same deterministic validation
+rollout every 1,000 steps for private review, and every node records five-second GPU utilization,
+memory, temperature, and power telemetry for the full timed run.
 
 ### Post-pilot action-routing amendment
 
@@ -187,10 +188,12 @@ all 520 raw POV rows with seeds 37 through 41. This tests whether aligned action
 important in immediate combat/death context; it remains a held-out diffusion-loss diagnostic and
 must not be reported as generated death-classification accuracy.
 
-For the final GH200 checkpoints, the midpoint true-versus-cross-POV-shifted diagnostic is repeated
-on all 69 untouched confirmatory rounds / 690 POV rows with seeds 37 through 41. This is a
-preregistered secondary endpoint. The validation-only G7e gate and post-hoc pilot routing diagnostic
-must remain visibly separated from it.
+For the final GH200 checkpoints, all four action modes are repeated on both midpoint and
+first-death windows over all 69 untouched confirmatory rounds / 690 POV rows with seeds 37 through
+41. Before any confirmatory model output existed, an annotation-only eligibility check verified
+that all 69 rounds contain an in-range `player_death`; it did not read video or model metrics.
+These are preregistered secondary endpoints. The validation-only G7e gate and post-hoc pilot
+routing diagnostic must remain visibly separated from them.
 
 ## Reporting and interpretation
 
@@ -222,12 +225,20 @@ ten POV rows, 16 frames per row, 168x308 RGB, 8 fps, and the released MIRA actio
 
 The benchmark must:
 
-- compare the candidate worker/prefetch settings for both single and synchronized grouping;
+- compare candidate worker settings for both synchronized and shuffled grouping;
 - verify byte-identical decoded video, key, and mouse tensors for the first deterministic
   single/synchronized round before timing;
-- record the dataset manifest digest, source commit/status, command, Torch/TorchCodec/CUDA
+- pin the explicit confirmatory-manifest path and digest rather than rely on filename discovery;
+- record the dataset manifest digest, source commit/status, hostname, command, Torch/TorchCodec/CUDA
   versions, hardware, first-batch hashes, and per-case throughput; and
 - write an atomic JSON result and fail nonzero on any semantic or timing-case error.
+
+The Slurm publication path runs at least three independent repeats on each of the four allocated
+hosts. Duplicate paths, duplicate payloads, reused completion timestamps, wrong-host evidence, a
+non-GH200 GPU, or fewer than four distinct hosts fail closed. One common worker count is selected
+by maximizing the lower of synchronized and shuffled mean input throughput over every node/repeat;
+an exact score tie chooses fewer workers. The chosen queue configuration is then revalidated
+against only the current node's evidence before that node enters training.
 
 Changing only the number of CPU workers or queue settings is allowed after this gate because it
 does not change decoded samples. A GPU/DALI backend additionally requires a preregistered decoded
@@ -248,6 +259,8 @@ or copying from a live training volume.
 - Untouched confirmatory split: `scripts/prepare_cs2_confirmatory_split.py`
 - Isolated loader-benchmark staging: `scripts/stage_cs2_loader_benchmark_val.sh`
 - Exact-contract data-loader benchmark: `scripts/bench_cs2_dataloader.py`
+- Per-node GH200 loader preflight: `scripts/run_cs2_gh200_loader_preflight.sh`
+- Slurm-native four-node seed orchestration: `scripts/run_cs2_gh200_slurm_seed.sh`
 - G7e pilot: `scripts/run_cs2_rebuttal_pipeline.sh`
 - Paired pilot evaluation: `scripts/run_cs2_rebuttal_eval.sh`
 - Action loss diagnostic: `scripts/run_cs2_action_loss_ablation.sh`
@@ -278,11 +291,13 @@ five-second `nvidia-smi` telemetry for peak-memory
 disclosure; because telemetry was enabled after the first single-arm checkpoint, single-arm peak
 memory from that trace is explicitly labeled as partial, while the shared arm is fully covered.
 
-The GH200 evaluator ends by running its separate fail-closed auditor. It verifies the exact
-four-node/one-GPU topology, GH200 identity, common clean commit, repeated frozen loader selection,
-per-node telemetry, 640 global model-facing frames per optimizer step, equal wall-clock limits,
-spatial routing, fixed validation-rollout cadence, final checkpoint hashes, all 69 untouched test
-rounds (690 POV rows), five evaluation seeds, and all four paired action interventions.
+The GH200 evaluator ends by running its separate fail-closed auditor. It verifies one Slurm job
+with four distinct hostnames and rank identities, exactly one scheduler-visible GH200 per node,
+common clean commit, three or more node-local loader repeats bound to the confirmatory manifest,
+the common frozen loader selection, per-node telemetry, 640 global model-facing frames per
+optimizer step, equal wall-clock limits, spatial routing, fixed validation-rollout cadence, final
+checkpoint hashes, all 69 untouched test rounds (690 POV rows), five evaluation seeds, and complete
+midpoint and first-death four-mode action-intervention grids.
 After at least three child audits pass, the sweep summarizer requires counterbalanced arm order and
 common code/data provenance, then aggregates each nested evaluation-seed mean across training
 seeds. The reported independent unit is therefore the training seed; diffusion evaluation seeds

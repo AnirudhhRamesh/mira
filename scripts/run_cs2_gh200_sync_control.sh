@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Four-node GH200 synchronized-vs-shuffled matched-information ablation.
 #
-# Launch this same script on every node with NODE_RANK=0..NNODES-1 and a shared MASTER_ADDR,
-# CS1K_DATASET_DIR, CS1K_CODEC_CHECKPOINT, and CS1K_OUTPUT_ROOT. Each arm uses the identical
-# ten-player architecture, global batch, action/video volume, seed, GPU topology, and wall-clock
-# budget; only whether the ten POVs come from the same synchronized round changes.
+# The publication path launches this script once per node through Slurm. Each arm uses the
+# identical ten-player architecture, global batch, action/video volume, seed, GPU topology, and
+# wall-clock budget; only whether the ten POVs come from the same synchronized round changes.
 set -euo pipefail
 
 project_dir=${MIRA_PROJECT_DIR:-$PWD}
@@ -27,7 +26,7 @@ fi
 arm_order=${CS1K_ARM_ORDER:-$default_arm_order}
 
 nnodes=${NNODES:-4}
-node_rank=${NODE_RANK:?Set NODE_RANK=0..NNODES-1}
+node_rank=${NODE_RANK:-${SLURM_PROCID:-}}
 nproc_per_node=${NPROC_PER_NODE:-1}
 master_addr=${MASTER_ADDR:?Set MASTER_ADDR to the rank-0 hostname or IP}
 master_port=${MASTER_PORT:-29500}
@@ -35,15 +34,38 @@ dataloader_workers=${CS1K_DATALOADER_WORKERS:?Freeze workers from the GH200 load
 dataloader_prefetch_factor=${CS1K_DATALOADER_PREFETCH_FACTOR:?Freeze prefetch from the GH200 benchmark}
 dataloader_persistent_workers=${CS1K_DATALOADER_PERSISTENT_WORKERS:?Freeze persistence from the benchmark}
 dataloader_pin_memory=${CS1K_DATALOADER_PIN_MEMORY:?Freeze pin-memory from the GH200 benchmark}
-loader_benchmark_jsons=${CS1K_LOADER_BENCHMARK_JSONS:?Provide at least three GH200 benchmark JSONs}
+loader_benchmark_root=${CS1K_LOADER_BENCHMARK_ROOT:-}
+loader_benchmark_jsons=${CS1K_LOADER_BENCHMARK_JSONS:-}
+global_loader_selection=${CS1K_GLOBAL_LOADER_SELECTION:?Set the four-node frozen loader selection}
+require_slurm=${CS1K_REQUIRE_SLURM:-true}
+node_hostname=$(hostname)
 
 if [[ "$nnodes" != 4 || "$nproc_per_node" != 1 ]]; then
   echo "The preregistered GH200 topology is exactly four nodes with one process/GPU per node" >&2
   exit 1
 fi
 if ! [[ "$node_rank" =~ ^[0-3]$ ]]; then
-  echo "NODE_RANK must be one of 0, 1, 2, or 3" >&2
+  echo "NODE_RANK or SLURM_PROCID must be one of 0, 1, 2, or 3" >&2
   exit 1
+fi
+if [[ "$require_slurm" != true && "$require_slurm" != false ]]; then
+  echo "CS1K_REQUIRE_SLURM must be true or false" >&2
+  exit 1
+fi
+if [[ "$require_slurm" == true ]]; then
+  : "${SLURM_JOB_ID:?Publication GH200 runs require a Slurm allocation}"
+  : "${SLURM_JOB_NODELIST:?SLURM_JOB_NODELIST is required}"
+  : "${SLURM_PROCID:?SLURM_PROCID is required}"
+  : "${SLURM_NODEID:?SLURM_NODEID is required}"
+  slurm_nodes=${SLURM_NNODES:-${SLURM_JOB_NUM_NODES:-}}
+  if [[ "$slurm_nodes" != 4 ]]; then
+    echo "Slurm allocation must contain exactly four nodes, found ${slurm_nodes:-unset}" >&2
+    exit 1
+  fi
+  if [[ "$SLURM_PROCID" != "$node_rank" || "$SLURM_NODEID" != "$node_rank" ]]; then
+    echo "One task per node is required: rank=$node_rank procid=$SLURM_PROCID nodeid=$SLURM_NODEID" >&2
+    exit 1
+  fi
 fi
 
 python_bin=${MIRA_PYTHON:-$project_dir/.pixi/envs/default/bin/python}
@@ -74,6 +96,21 @@ if [[ ! -f "$split_provenance" ]]; then
   echo "Confirmatory split provenance not found: $split_provenance" >&2
   exit 1
 fi
+if [[ ! -f "$global_loader_selection" ]]; then
+  echo "Global four-node loader selection not found: $global_loader_selection" >&2
+  exit 1
+fi
+mapfile -t visible_gpu_names < <(
+  nvidia-smi --query-gpu=name --format=csv,noheader | sed 's/[[:space:]]*$//'
+)
+if [[ ${#visible_gpu_names[@]} -ne 1 ]]; then
+  echo "Exactly one scheduler-visible GPU is required per node, found ${#visible_gpu_names[@]}" >&2
+  exit 1
+fi
+if [[ "${visible_gpu_names[0],,}" != *gh200* ]]; then
+  echo "Expected one GH200 per node, found ${visible_gpu_names[0]}" >&2
+  exit 1
+fi
 if [[ "$(dirname "$(realpath "$manifest_path")")" != "$(realpath "$dataset_dir")" ]]; then
   echo "CS1K_MANIFEST_PATH must live directly inside CS1K_DATASET_DIR" >&2
   exit 1
@@ -97,13 +134,43 @@ fi
 experiment_root=$output_root/seed_$seed
 node_provenance=$experiment_root/provenance/node_$node_rank
 mkdir -p "$node_provenance"
+cp "$global_loader_selection" "$node_provenance/global_loader_selection.json"
 "$python_bin" scripts/prepare_cs2_confirmatory_split.py \
   --source-manifest "$dataset_dir/manifest.parquet" \
   --output-manifest "$manifest_path" \
   --provenance-output "$split_provenance" \
   --verify-only \
   >"$node_provenance/confirmatory_split_verification.json"
-read -r -a loader_benchmark_paths <<<"$loader_benchmark_jsons"
+if [[ -n "$loader_benchmark_root" && -n "$loader_benchmark_jsons" ]]; then
+  echo "Set only one of CS1K_LOADER_BENCHMARK_ROOT or CS1K_LOADER_BENCHMARK_JSONS" >&2
+  exit 1
+fi
+if [[ -n "$loader_benchmark_root" ]]; then
+  benchmark_node_root=$loader_benchmark_root/$node_hostname
+  if [[ ! -d "$benchmark_node_root" ]]; then
+    echo "Node-local loader benchmark directory not found: $benchmark_node_root" >&2
+    exit 1
+  fi
+  mapfile -d '' -t loader_benchmark_paths < <(
+    find "$benchmark_node_root" -maxdepth 1 -type f -name '*.json' -print0 | sort -z
+  )
+elif [[ -n "$loader_benchmark_jsons" ]]; then
+  loader_benchmark_jsons=${loader_benchmark_jsons//\{hostname\}/$node_hostname}
+  read -r -a loader_benchmark_paths <<<"$loader_benchmark_jsons"
+else
+  echo "Provide node-local GH200 evidence through CS1K_LOADER_BENCHMARK_ROOT or JSONS" >&2
+  exit 1
+fi
+if [[ ${#loader_benchmark_paths[@]} -lt 3 ]]; then
+  echo "At least three node-local loader benchmark JSONs are required" >&2
+  exit 1
+fi
+for benchmark_path in "${loader_benchmark_paths[@]}"; do
+  if [[ ! -f "$benchmark_path" ]]; then
+    echo "Loader benchmark JSON not found: $benchmark_path" >&2
+    exit 1
+  fi
+done
 "$python_bin" scripts/validate_cs2_loader_selection.py "${loader_benchmark_paths[@]}" \
   --num-workers "$dataloader_workers" \
   --prefetch-factor "$dataloader_prefetch_factor" \
@@ -111,6 +178,10 @@ read -r -a loader_benchmark_paths <<<"$loader_benchmark_jsons"
   --pin-memory "$dataloader_pin_memory" \
   --expected-git-commit "$code_commit" \
   --expected-gpu-substring GH200 \
+  --expected-hostname "$node_hostname" \
+  --expected-host-count 1 \
+  --minimum-repeats-per-hostname 3 \
+  --expected-manifest-sha256 "$(sha256sum "$manifest_path" | cut -d' ' -f1)" \
   --output "$node_provenance/frozen_loader_selection.json"
 "$python_bin" scripts/prepare_counterstrike1k.py \
   --data-root "$dataset_dir" \
@@ -143,8 +214,17 @@ printf '%s\n' \
   "arm_order=$arm_order" \
   "nnodes=$nnodes" \
   "nproc_per_node=$nproc_per_node" \
+  "node_rank=$node_rank" \
+  "hostname=$node_hostname" \
+  "visible_gpu_count=${#visible_gpu_names[@]}" \
+  "visible_gpu_name=${visible_gpu_names[0]}" \
   "master_addr=$master_addr" \
   "master_port=$master_port" \
+  "scheduler=$([[ -n ${SLURM_JOB_ID:-} ]] && printf slurm || printf manual)" \
+  "slurm_job_id=${SLURM_JOB_ID:-}" \
+  "slurm_job_nodelist=${SLURM_JOB_NODELIST:-}" \
+  "slurm_procid=${SLURM_PROCID:-}" \
+  "slurm_nodeid=${SLURM_NODEID:-}" \
   "manifest_path=$manifest_path" \
   "manifest_sha256=$(sha256sum "$manifest_path" | cut -d' ' -f1)" \
   "split_provenance=$split_provenance" \
@@ -154,6 +234,7 @@ printf '%s\n' \
   "dataloader_prefetch_factor=$dataloader_prefetch_factor" \
   "dataloader_persistent_workers=$dataloader_persistent_workers" \
   "dataloader_pin_memory=$dataloader_pin_memory" \
+  "global_loader_selection_sha256=$(sha256sum "$node_provenance/global_loader_selection.json" | cut -d' ' -f1)" \
   "frozen_loader_selection_sha256=$(sha256sum "$node_provenance/frozen_loader_selection.json" | cut -d' ' -f1)" \
   >"$node_provenance/launcher.env"
 

@@ -11,6 +11,7 @@ from mira.data.counterstrike import CS2_ACTION_DTYPE, CS2_KEYS
 from mira.data.counterstrike_benchmark import (
     assess_decoded_video_parity,
     batch_signature,
+    collect_provenance,
     validate_batch_contract,
     verify_single_synchronized_parity,
 )
@@ -151,6 +152,17 @@ def test_single_synchronized_tensor_parity_gate(tmp_path, monkeypatch) -> None:
     assert len(result["sample_keys"]) == 10
     assert len(result["video_sha256"]) == 64
     assert result["source_start_frame"] == 12
+
+
+def test_benchmark_provenance_pins_explicit_manifest(tmp_path) -> None:
+    root = _fixture(tmp_path)
+    explicit = root / "manifest_dust2_confirmatory_spatial_v1.parquet"
+    explicit.write_bytes((root / "manifest_dust2.parquet").read_bytes())
+
+    provenance = collect_provenance(root, manifest_path=explicit)
+
+    assert provenance["manifest_path"] == str(explicit)
+    assert len(provenance["manifest_sha256"]) == 64
 
 
 def test_benchmark_contract_and_signature_fail_closed(tmp_path, monkeypatch) -> None:

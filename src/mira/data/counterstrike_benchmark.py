@@ -151,6 +151,7 @@ def assess_decoded_video_parity(
 def compare_torchcodec_cpu_cuda(
     data_root: str | Path,
     *,
+    index_path: str | Path | None = None,
     split: str = "train",
     map_slug: str = "dust2",
     clip_len: int = 16,
@@ -169,10 +170,11 @@ def compare_torchcodec_cpu_cuda(
         }
 
     root = Path(data_root)
+    loader_index = Path(index_path) if index_path is not None else root
     reference_batch, metadata = next(
         iter(
             _loader(
-                root,
+                loader_index,
                 split=split,
                 map_slug=map_slug,
                 group_mode="synchronized",
@@ -493,10 +495,14 @@ def _package_version(name: str) -> str | None:
         return None
 
 
-def collect_provenance(data_root: Path) -> dict[str, Any]:
+def collect_provenance(
+    data_root: Path,
+    *,
+    manifest_path: Path | None = None,
+) -> dict[str, Any]:
     """Capture enough environment and source state to audit a benchmark result."""
     project_root = Path(__file__).resolve().parents[3]
-    manifest = (
+    manifest = manifest_path or (
         data_root / "manifest_dust2.parquet"
         if (data_root / "manifest_dust2.parquet").is_file()
         else data_root / "manifest.parquet"
@@ -544,6 +550,15 @@ def collect_provenance(data_root: Path) -> dict[str, Any]:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        help=(
+            "Explicit model-facing manifest. It must live directly inside --data-root. "
+            "Publication benchmarks should pin the confirmatory manifest rather than rely "
+            "on the default filename lookup."
+        ),
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--split", default="train")
     parser.add_argument("--map-slug", default="dust2")
@@ -601,12 +616,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.prefetch_factor < 1:
         raise ValueError("prefetch_factor must be positive")
 
+    data_root = args.data_root.resolve()
+    manifest_path = args.manifest.resolve() if args.manifest is not None else None
+    if manifest_path is not None:
+        if not manifest_path.is_file():
+            raise FileNotFoundError(f"Explicit benchmark manifest not found: {manifest_path}")
+        if manifest_path.parent != data_root:
+            raise ValueError("--manifest must live directly inside --data-root")
+    index_path = manifest_path or data_root
     frame_size = (args.frame_height, args.frame_width)
     payload: dict[str, Any] = {
         "schema": "mira-cs2-dataloader-benchmark-v1",
-        "provenance": collect_provenance(args.data_root),
+        "provenance": collect_provenance(data_root, manifest_path=manifest_path),
         "config": {
-            "data_root": str(args.data_root),
+            "data_root": str(data_root),
+            "manifest_path": str(manifest_path) if manifest_path is not None else None,
             "split": args.split,
             "map_slug": args.map_slug,
             "group_modes": args.group_modes,
@@ -635,7 +659,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.skip_parity_check:
         try:
             payload["parity"] = verify_single_synchronized_parity(
-                args.data_root,
+                index_path,
                 split=args.split,
                 map_slug=args.map_slug,
                 clip_len=args.clip_len,
@@ -654,7 +678,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.compare_torchcodec_cuda:
         try:
             payload["decoder_parity"] = compare_torchcodec_cpu_cuda(
-                args.data_root,
+                data_root,
+                index_path=index_path,
                 split=args.split,
                 map_slug=args.map_slug,
                 clip_len=args.clip_len,
@@ -680,7 +705,7 @@ def main(argv: list[str] | None = None) -> int:
             persistent = bool(args.persistent_workers and workers > 0)
             try:
                 result = benchmark_case(
-                    args.data_root,
+                    index_path,
                     split=args.split,
                     map_slug=args.map_slug,
                     group_mode=group_mode,
