@@ -168,9 +168,22 @@ def _select_table(table, *, map_slug: str, splits: list[str] | None):
     )
 
 
+def _resolve_manifest(data_root: Path, manifest: Path | None) -> Path:
+    selected = manifest or (data_root / "manifest.parquet")
+    if selected.parent.resolve() != data_root.resolve():
+        raise ValueError("--manifest must live directly inside --data-root so payload paths stay bound")
+    return selected
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=None,
+        help="Optional manifest override, e.g. a frozen confirmatory split within data-root.",
+    )
     parser.add_argument("--map-slug", default="dust2")
     parser.add_argument(
         "--splits",
@@ -181,7 +194,7 @@ def main() -> None:
     parser.add_argument("--provenance-output", type=Path, required=True)
     args = parser.parse_args()
 
-    full_manifest = args.data_root / "manifest.parquet"
+    full_manifest = _resolve_manifest(args.data_root, args.manifest)
     table = pq.read_table(full_manifest)
     subset = _select_table(table, map_slug=args.map_slug, splits=args.splits)
     rows = subset.to_pylist()

@@ -1,17 +1,20 @@
 # CounterStrike-1K Dust2 MIRA rebuttal protocol
 
-This protocol is versioned before inspecting either final world-model result. It distinguishes the
-single-GPU pilot from the confirmatory matched-information experiment and fixes the held-out
-evaluation contract in advance.
+The original pilot protocol was versioned before inspecting either pilot world-model result. This
+document now also records a dated post-pilot amendment, frozen before corrective training or any
+inspection of the new confirmatory test clips. It distinguishes exploratory/post-hoc evidence from
+the untouched matched-information endpoint.
 
 ## Scope and data unit
 
 - Map: Dust2 only.
 - Source: CounterStrike-1K 360p WebDataset v12, materialized and verified by
   `scripts/prepare_counterstrike1k.py`.
-- Training support: 39 matches, 835 complete ten-POV rounds, 8,350 POV rows, 95.386 aligned
-  POV-hours (the sum over the ten synchronized views inside their common temporal intersections).
-- Validation: 3 matches / 54 rounds. Test: 3 disjoint matches / 52 rounds.
+- Release training support used by the pilot: 39 matches, 835 complete ten-POV rounds, 8,350 POV
+  rows, 95.386 aligned POV-hours (the sum over the ten synchronized views inside their common
+  temporal intersections).
+- Release validation: 3 matches / 54 rounds. Release test consumed by the pilot: 3 disjoint
+  matches / 52 rounds.
 - No match may cross train, validation, or test. All ten POV rows of a round remain in one split.
 - Input: 168x308 RGB, 16 frames at 8 fps. The codec has temporal stride 2, so the model receives
   eight latent frames covering two seconds.
@@ -24,6 +27,32 @@ from the derived shard list.
 For the v12 360p release used here, the canonical selection SHA-256 is
 `5b4733ba910c96221b06923699b6595b27b23ec9659cb1b15032bbf7dceb9cf9` and the full manifest
 SHA-256 is `e6d1199595327ccbed7a79760266f1c30fdcf23b717232705c9b11bb6d8707d3`.
+
+### Post-pilot confirmatory split amendment (frozen 2026-07-25 UTC)
+
+The spatial action router described below was selected after looking at the pilot test result.
+Therefore the release test is relabeled `pilot_test` and cannot be reused as untouched confirmatory
+evidence. `scripts/prepare_cs2_confirmatory_split.py` deterministically hash-ranks only release-train
+match identifiers; it never reads video, controls, events, duration, or a model metric. With salt
+`cs1k-dust2-spatial-routing-confirmatory-v1`, the first three matches are:
+
+- `0a3129ba726a`
+- `798dd34447aa`
+- `55065858bcce`
+
+Those matches become the new `test`; the other 36 release-train matches remain `train`; release
+validation stays `val`; and release test becomes `pilot_test`. The resulting contract is:
+
+- train: 36 matches / 766 rounds / 7,660 POV rows / 87.090 aligned POV-hours;
+- validation: 3 matches / 54 rounds / 540 POV rows / 4.959 aligned POV-hours;
+- untouched confirmatory test: 3 matches / 69 rounds / 690 POV rows / 8.296 aligned POV-hours;
+- quarantined pilot test: 3 matches / 52 rounds / 520 POV rows.
+
+The semantic selection digest is
+`056e60b7bb4435e212f43e6a2e4c2ea0f5c1265978180588ff59689a2fbabb0f`. The generated Parquet
+manifest and provenance are verified independently on every training node before launch. Any
+change to the salt, selected identifiers, split cardinalities, source-manifest digest, or semantic
+digest defines a different experiment.
 
 ## Pilot question: single versus shared MIRA
 
@@ -55,9 +84,9 @@ rounds?
 
 `group_mode=synchronized` and `group_mode=shuffled` use:
 
-- the same ten-player wrapper, token/action counts, global batch, codec, initialization seed,
-  optimizer, four-node GH200 topology, and per-arm wall-clock budget;
-- the same fixed splits and complete-round eligibility rule;
+- the same ten-player wrapper with `action_routing=spatial`, token/action counts, global batch,
+  codec, initialization seed, optimizer, four-node GH200 topology, and per-arm wall-clock budget;
+- the same amended, frozen splits and complete-round eligibility rule;
 - different training grouping only.
 
 Both trained models are evaluated on synchronized test groups. Evaluating the shuffled-trained arm
@@ -68,10 +97,43 @@ least three training seeds; counterbalance arm order across seeds.
 `scripts/run_cs2_gh200_sync_control.sh` runs one seed and accepts an explicit arm order, while
 `scripts/run_cs2_gh200_sync_control_eval.sh` forces synchronized test grouping.
 
+### Post-pilot action-routing amendment
+
+The released MIRA multiplayer wrapper adds player identity, projects all ten player action streams,
+and then averages the player axis into one global action vector. That vector is broadcast over the
+entire ten-POV latent grid. A post-hoc cyclic cross-POV intervention on the completed pilot shared
+checkpoint changed projected per-player conditioning by RMS `0.085145`, but the global router
+passed only RMS `0.0001268` (mean attenuation `0.001494`; routed cosine `0.999995`). This explains
+why the pilot shared model was effectively insensitive to player/action correspondence; it is not a
+data-loader mismatch.
+
+The corrective `spatial` mode keeps the parameterization unchanged but broadcasts player `p`'s
+projected action only over player `p`'s latent height band before joint spatial attention. A
+routing-only counterfactual on that same checkpoint preserved the intervention with mean attenuation
+`1.000000`. Both confirmatory arms use this identical router, so the only arm-level treatment remains
+synchronized versus shuffled training groups. The old global-router pilot remains reported and is
+not retroactively reinterpreted as confirmatory evidence.
+
+### Frozen G7e engineering gate
+
+Before spending GH200 compute, one one-hour synchronized spatial-router model (training seed 28) is
+trained on the amended training split using the frozen pilot codec. This is an operational
+preflight, not a model-quality comparison. It evaluates only all 54 release-validation rounds with
+diffusion seeds 37, 38, and 39. The preflight passes only if:
+
+- spatial routing preserves at least 0.95 of the projected cross-POV action-delta RMS;
+- cross-POV-shifted actions raise mean validation loss by at least 0.005 and at least 1% relative to
+  true actions; and
+- the paired degradation is positive for every one of the three fixed diffusion seeds.
+
+The thresholds are encoded in `scripts/assess_cs2_spatial_routing_preflight.py`. They must not be
+relaxed after seeing the run. Failure blocks the GH200 launch and is retained as a reported result.
+
 ## Held-out endpoints
 
-The test suite evaluates every one of the 52 complete test rounds at its deterministic midpoint,
-which is 520 raw POV clips per model and seed.
+The pilot suite evaluates every one of the 52 release-test rounds at its deterministic midpoint
+(520 raw POV clips per model and seed). The confirmatory suite instead evaluates every one of the
+69 newly frozen test rounds (690 raw POV clips per model and seed).
 
 Primary endpoints:
 
@@ -88,14 +150,15 @@ Secondary endpoints:
 - denoising latency and raw-POV latent throughput;
 - train/validation curves at equal wall time and matched processed frames.
 
-The metric backbone is public `dinov2_vitb14` for all arms. Test rollout seeds are fixed to
-37, 38, and 39 for the pilot and 37 through 41 for the GH200 control. Validation, rollout-metric,
-and speed phases reseed independently so enabling or skipping one phase cannot change another.
-Sample counts must divide batch size exactly; silent truncation is an error.
+The metric backbone is public `dinov2_vitb14` for all arms. Test rollout seeds are fixed to 37, 38,
+and 39 for the pilot and 37 through 41 for the GH200 control. The GH200 evaluator derives the exact
+69-round count from the frozen split provenance and rejects a conflicting manual override.
+Validation, rollout-metric, and speed phases reseed independently so enabling or skipping one phase
+cannot change another. Sample counts must divide batch size exactly; silent truncation is an error.
 
 ## Action-conditioning diagnostic
 
-For each final pilot checkpoint, validation diffusion loss is recomputed on all 520 test POV rows
+For each final pilot checkpoint, diffusion loss is recomputed on all 520 release-test POV rows
 with the same videos, windows, and diffusion RNG under:
 
 - true actions;
@@ -115,6 +178,11 @@ clamped only at round boundaries, and is identical for all ten POVs and both mod
 all 520 raw POV rows with seeds 37 through 41. This tests whether aligned actions become more
 important in immediate combat/death context; it remains a held-out diffusion-loss diagnostic and
 must not be reported as generated death-classification accuracy.
+
+For the final GH200 checkpoints, the midpoint true-versus-cross-POV-shifted diagnostic is repeated
+on all 69 untouched confirmatory rounds / 690 POV rows with seeds 37 through 41. This is a
+preregistered secondary endpoint. The validation-only G7e gate and post-hoc pilot routing diagnostic
+must remain visibly separated from it.
 
 ## Reporting and interpretation
 
@@ -161,11 +229,15 @@ or copying from a live training volume.
 ## Reproduction entry points
 
 - Data selection/materialization: `scripts/prepare_counterstrike1k.py`
+- Untouched confirmatory split: `scripts/prepare_cs2_confirmatory_split.py`
 - Isolated loader-benchmark staging: `scripts/stage_cs2_loader_benchmark_val.sh`
 - Exact-contract data-loader benchmark: `scripts/bench_cs2_dataloader.py`
 - G7e pilot: `scripts/run_cs2_rebuttal_pipeline.sh`
 - Paired pilot evaluation: `scripts/run_cs2_rebuttal_eval.sh`
 - Action loss diagnostic: `scripts/run_cs2_action_loss_ablation.sh`
+- Spatial-router representation diagnostic: `scripts/diagnose_cs2_multi_action_routing.py`
+- Validation-only spatial-router preflight: `scripts/run_cs2_spatial_routing_preflight.sh`
+- Frozen preflight gate: `scripts/assess_cs2_spatial_routing_preflight.py`
 - First-death-centered action diagnostic: `scripts/run_cs2_death_action_ablation.sh`
 - Unattended paired-evaluation guard: `scripts/watch_cs2_rebuttal_eval.sh`
 - Unattended midpoint-action guard: `scripts/watch_cs2_action_loss_ablation.sh`

@@ -11,6 +11,14 @@ Hydra applications for training, evaluation, and serving. Each reads its config 
 - `bench_wm_speed.py` — micro-benchmark world-model rollout speed.
 - `bench_cs2_dataloader.py` — benchmark the exact Dust2 MIRA input contract across worker settings
   and fail closed unless the fixed first-round single/synchronized video and action tensors match.
+- `prepare_cs2_confirmatory_split.py` — freeze or verify the post-pilot, match-atomic Dust2
+  confirmatory split by salted hash only, quarantining the already consumed release test.
+- `diagnose_cs2_multi_action_routing.py` — quantify how much global or spatial multiplayer routing
+  preserves a deterministic cross-POV action intervention before the diffusion transformer.
+- `run_cs2_spatial_routing_preflight.sh` — run the frozen one-hour G7e validation-only engineering
+  gate for spatial player-aligned action routing.
+- `assess_cs2_spatial_routing_preflight.py` — enforce the preregistered routing and action-loss
+  thresholds without consulting the new confirmatory test.
 - `render_cs2_rebuttal_report.py` — render deterministic Markdown tables only after the complete
   Dust2 run audit passes and all summaries match the audited checkpoint and seed contracts.
 - `validate_cs2_loader_selection.py` — freeze a GH200 loader configuration only from at least three

@@ -7,16 +7,45 @@ set -euo pipefail
 
 project_dir=${MIRA_PROJECT_DIR:-$PWD}
 training_root=${CS1K_TRAINING_ROOT:?Set the seed-specific GH200 training directory}
+dataset_dir=${CS1K_DATASET_DIR:?Set the CounterStrike-1K materialization directory}
+manifest_path=${CS1K_MANIFEST_PATH:?Set the frozen confirmatory manifest path}
+split_provenance=${CS1K_CONFIRMATORY_SPLIT_PROVENANCE:?Set the frozen split provenance}
 python_bin=${MIRA_PYTHON:-$project_dir/.pixi/envs/default/bin/python}
 eval_root=${CS1K_EVAL_ROOT:-$training_root/evaluation/synchronized_test_seed_sweep}
 eval_seeds=${CS1K_EVAL_SEEDS:-"37 38 39 40 41"}
-test_rounds=${CS1K_TEST_ROUNDS:-52}
 
 cd "$project_dir"
 export PYTHONPATH="$project_dir/src${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONDONTWRITEBYTECODE=1
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export WANDB_MODE=disabled
+
+if [[ -n "$(git status --porcelain=v1)" ]]; then
+  echo "GH200 publication evaluation requires a clean source tree" >&2
+  exit 1
+fi
+if [[ ! -f "$manifest_path" || ! -f "$split_provenance" ]]; then
+  echo "Frozen confirmatory manifest and provenance are required" >&2
+  exit 1
+fi
+if [[ "$(dirname "$(realpath "$manifest_path")")" != "$(realpath "$dataset_dir")" ]]; then
+  echo "CS1K_MANIFEST_PATH must live directly inside CS1K_DATASET_DIR" >&2
+  exit 1
+fi
+
+test_rounds=$(
+  "$python_bin" - "$split_provenance" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+print(payload["statistics"]["splits"]["test"]["rounds"])
+PY
+)
+if [[ -n "${CS1K_TEST_ROUNDS:-}" && "$CS1K_TEST_ROUNDS" != "$test_rounds" ]]; then
+  echo "CS1K_TEST_ROUNDS=$CS1K_TEST_ROUNDS disagrees with frozen split count $test_rounds" >&2
+  exit 1
+fi
 
 latest_checkpoint() {
   local arm=$1
@@ -32,6 +61,12 @@ if [[ -z "$shuffled_checkpoint" || -z "$synchronized_checkpoint" ]]; then
 fi
 
 mkdir -p "$eval_root/provenance"
+"$python_bin" scripts/prepare_cs2_confirmatory_split.py \
+  --source-manifest "$dataset_dir/manifest.parquet" \
+  --output-manifest "$manifest_path" \
+  --provenance-output "$split_provenance" \
+  --verify-only \
+  >"$eval_root/provenance/confirmatory_split_verification.json"
 printf '%s\n' "$shuffled_checkpoint" >"$eval_root/provenance/shuffled_checkpoint.txt"
 printf '%s\n' "$synchronized_checkpoint" >"$eval_root/provenance/synchronized_checkpoint.txt"
 sha256sum "$shuffled_checkpoint" "$synchronized_checkpoint" \
@@ -41,6 +76,41 @@ git status --porcelain=v1 >"$eval_root/provenance/evaluator_code_status.txt"
 git diff --binary >"$eval_root/provenance/evaluator_code.patch"
 printf '%s\n' "$eval_seeds" >"$eval_root/provenance/seeds.txt"
 printf '%s\n' "$test_rounds" >"$eval_root/provenance/test_rounds.txt"
+sha256sum "$manifest_path" "$split_provenance" \
+  >"$eval_root/provenance/confirmatory_split_files.sha256"
+
+"$python_bin" - "$manifest_path" "$shuffled_checkpoint" "$synchronized_checkpoint" \
+  >"$eval_root/provenance/checkpoint_config_verification.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+import yaml
+
+manifest = str(Path(sys.argv[1]).resolve())
+result = {}
+for arm, checkpoint in zip(("shuffled", "synchronized"), sys.argv[2:], strict=True):
+    config_path = Path(checkpoint).resolve().parents[1] / "world_model_config.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    observed_manifest = str(Path(config["dataset"]["test_index"]).resolve())
+    observed_group = config["dataset"]["group_mode"]
+    observed_routing = config["model"]["architecture"]["config"].get(
+        "action_routing", "global_mean"
+    )
+    if observed_manifest != manifest:
+        raise ValueError(f"{arm} checkpoint points at {observed_manifest}, expected {manifest}")
+    if observed_group != arm:
+        raise ValueError(f"{arm} checkpoint records group_mode={observed_group}")
+    if observed_routing != "spatial":
+        raise ValueError(f"{arm} checkpoint records action_routing={observed_routing}")
+    result[arm] = {
+        "config": str(config_path),
+        "manifest": observed_manifest,
+        "training_group_mode": observed_group,
+        "action_routing": observed_routing,
+    }
+print(json.dumps({"verified": True, "checkpoints": result}, indent=2, sort_keys=True))
+PY
 
 for seed in $eval_seeds; do
   seed_dir=$eval_root/seed_$seed

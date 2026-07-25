@@ -48,3 +48,15 @@ def test_select_table_without_split_filter_preserves_all_map_splits() -> None:
     selected = PREPARE._select_table(table, map_slug="dust2", splits=None)
 
     assert selected["sample_key"].to_pylist() == ["dust_train", "dust_val"]
+
+
+def test_manifest_override_must_remain_bound_to_data_root(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    default = PREPARE._resolve_manifest(data_root, None)
+    override = PREPARE._resolve_manifest(data_root, data_root / "confirmatory.parquet")
+
+    assert default == data_root / "manifest.parquet"
+    assert override == data_root / "confirmatory.parquet"
+    with pytest.raises(ValueError, match="must live directly"):
+        PREPARE._resolve_manifest(data_root, tmp_path / "elsewhere.parquet")

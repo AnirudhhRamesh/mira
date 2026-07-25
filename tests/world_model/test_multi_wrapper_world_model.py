@@ -51,18 +51,32 @@ def _td1_codec(*args, **kwargs) -> StubCodec:
     return codec
 
 
-def build_multi_wrapper(monkeypatch, n_players: int = 2, **wm_overrides) -> MultiWrapperWorldModel:
+def build_multi_wrapper(
+    monkeypatch,
+    n_players: int = 2,
+    action_routing: str = "global_mean",
+    **wm_overrides,
+) -> MultiWrapperWorldModel:
     """Build a :class:`MultiWrapperWorldModel` whose inner codec is a td==1 :class:`StubCodec`."""
     import mira.world_model.latent_world_model as lwm
 
     monkeypatch.setattr(lwm.VideoCodec, "load_from_checkpoint", staticmethod(_td1_codec))
-    config = MultiWrapperWorldModelConfig(n_players=n_players, wm_config=tiny_config(**wm_overrides))
+    config = MultiWrapperWorldModelConfig(
+        n_players=n_players,
+        action_routing=action_routing,
+        wm_config=tiny_config(**wm_overrides),
+    )
     model = MultiWrapperWorldModel(config)
     model.eval()
     return model
 
 
-def build_multi_wrapper_td2(monkeypatch, n_players: int = 2, **wm_overrides) -> MultiWrapperWorldModel:
+def build_multi_wrapper_td2(
+    monkeypatch,
+    n_players: int = 2,
+    action_routing: str = "global_mean",
+    **wm_overrides,
+) -> MultiWrapperWorldModel:
     """Build a :class:`MultiWrapperWorldModel` on a td==2 :class:`StubCodec`.
 
     Unlike :func:`build_multi_wrapper` (which forces td==1 via ``_td1_codec``), this uses the stub's
@@ -72,7 +86,11 @@ def build_multi_wrapper_td2(monkeypatch, n_players: int = 2, **wm_overrides) -> 
     import mira.world_model.latent_world_model as lwm
 
     monkeypatch.setattr(lwm.VideoCodec, "load_from_checkpoint", staticmethod(lambda *a, **k: StubCodec()))
-    config = MultiWrapperWorldModelConfig(n_players=n_players, wm_config=tiny_config(**wm_overrides))
+    config = MultiWrapperWorldModelConfig(
+        n_players=n_players,
+        action_routing=action_routing,
+        wm_config=tiny_config(**wm_overrides),
+    )
     model = MultiWrapperWorldModel(config)
     model.eval()
     return model
@@ -119,7 +137,7 @@ def test_tile_split_round_trip() -> None:
 
 
 def test_combine_player_actions_shape(monkeypatch) -> None:
-    """``_combine_player_actions`` collapses the player axis: ``(b*p, t, d) -> (b, t, d)``."""
+    """Legacy global routing collapses the player axis: ``(b*p,t,d) -> (b,t,d)``."""
     n_players = 4
     wrapper = build_multi_wrapper(monkeypatch, n_players=n_players)
     b, t = 2, 7
@@ -130,6 +148,83 @@ def test_combine_player_actions_shape(monkeypatch) -> None:
 
     assert a.shape == (b, t, d)
     assert torch.isfinite(a).all()
+
+
+def test_spatial_player_actions_align_with_latent_height_bands(monkeypatch) -> None:
+    """Spatial routing copies player ``p``'s projected actions only into player ``p``'s POV band."""
+    n_players = 4
+    wrapper = build_multi_wrapper(
+        monkeypatch,
+        n_players=n_players,
+        action_routing="spatial",
+    )
+    b, t = 2, 7
+    d = wrapper.single_world_model.action_encoder.dim
+    a_flat = torch.randn(b * n_players, t, d)
+
+    projected = wrapper._project_player_actions(a_flat)
+    routed = wrapper._combine_player_actions(a_flat)
+
+    player_height = wrapper.world_model.latent_height // n_players
+    latent_width = wrapper.world_model.latent_width
+    assert routed.shape == (
+        b,
+        t,
+        wrapper.world_model.latent_height,
+        latent_width,
+        d,
+    )
+    for player in range(n_players):
+        band = routed[:, :, player * player_height : (player + 1) * player_height]
+        expected = projected[:, player].unsqueeze(2).unsqueeze(3).expand_as(band)
+        assert torch.equal(band, expected)
+
+
+def test_spatial_player_actions_preserve_cross_pov_permutation(monkeypatch) -> None:
+    """Permuting player actions changes their routed POV bands instead of collapsing them by mean."""
+    n_players = 2
+    wrapper = build_multi_wrapper(
+        monkeypatch,
+        n_players=n_players,
+        action_routing="spatial",
+    )
+    t = 3
+    d = wrapper.single_world_model.action_encoder.dim
+    a_flat = torch.stack(
+        [
+            torch.full((t, d), -1.0),
+            torch.full((t, d), 1.0),
+        ]
+    )
+    shifted = a_flat.roll(1, dims=0)
+
+    routed = wrapper._combine_player_actions(a_flat)
+    routed_shifted = wrapper._combine_player_actions(shifted)
+
+    assert not torch.equal(routed, routed_shifted)
+    player_height = wrapper.world_model.latent_height // n_players
+    assert not torch.equal(
+        routed[:, :, :player_height],
+        routed_shifted[:, :, :player_height],
+    )
+
+
+def test_spatial_forward_loss_backpropagates(monkeypatch) -> None:
+    """The complete spatial-conditioning path is finite and reaches the player-routing parameters."""
+    wrapper = build_multi_wrapper(
+        monkeypatch,
+        n_players=2,
+        action_routing="spatial",
+    )
+    wrapper.train()
+    batch = make_batch(batch_size=4)
+
+    loss = wrapper(batch)["loss_total"]
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert wrapper.player_embedding.grad is not None
+    assert wrapper.player_action_projection[1].weight.grad is not None
 
 
 def test_forward_four_players_finite_loss(monkeypatch) -> None:

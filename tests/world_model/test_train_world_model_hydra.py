@@ -67,6 +67,18 @@ def test_counterstrike_config_exposes_evaluation_group_override() -> None:
     assert cfg.dataset.validation_group_mode is None
 
 
+def test_counterstrike_shared_small_config_uses_spatial_action_routing() -> None:
+    cfg = _compose(
+        overrides=[
+            "dataset=counterstrike1k_dust2",
+            "model=multi_wrapper_world_model_cs2_small",
+        ]
+    )
+
+    assert cfg.model.architecture.config.n_players == 10
+    assert cfg.model.architecture.config.action_routing == "spatial"
+
+
 def test_world_model_metrics_config_instantiates() -> None:
     from hydra.utils import instantiate
 

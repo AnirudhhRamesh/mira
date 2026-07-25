@@ -142,10 +142,11 @@ class LatentWorldModel(nn.Module):
 
     def diffusion_loss(self, z: Tensor, a: Tensor) -> dict[str, Tensor]:
         """Diagonal flow-matching loss given encoded latents ``z`` (b, t, h, w, c) and the action
-        embedding ``a``. This is the whole training tail; MultiWrapperWorldModel reuses it with a
-        tiled multi-player ``z`` and combined ``a`` so the loss logic cannot drift between the two
-        forwards. The bos repeat uses ``z.shape[0]`` so the tiled ``z`` (whose batch dim differs from
-        ``len(batch)``) is handled correctly."""
+        embedding ``a``. ``a`` is either global ``(b,t,d)`` conditioning or spatial
+        ``(b,t,h,w,d)`` conditioning aligned to ``z``. This is the whole training tail;
+        MultiWrapperWorldModel reuses it with a tiled multi-player ``z`` and routed ``a`` so the loss
+        logic cannot drift between the two forwards. The bos repeat uses ``z.shape[0]`` so the tiled
+        ``z`` (whose batch dim differs from ``len(batch)``) is handled correctly."""
         # The past frames are always clean (un-noised) latents.
         shifted_z = None
         if self.config.use_clean_past:

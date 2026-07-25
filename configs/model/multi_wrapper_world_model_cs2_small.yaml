@@ -8,6 +8,8 @@ architecture:
   config:
     _target_: mira.world_model.multi_wrapper_world_model.MultiWrapperWorldModelConfig
     n_players: 10
+    # Preserve the player-to-POV action correspondence instead of globally averaging ten streams.
+    action_routing: spatial
     wm_config:
       _target_: mira.world_model.config.LatentWorldModelConfig
       actions: ${dataset.actions}

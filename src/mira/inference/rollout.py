@@ -58,8 +58,8 @@ def _encode_window_actions(
     """Encode the action conditioning for the denoise window starting at latent index ``start``.
 
     Applies the same ``off = atd - 1`` shift as both model variants' inference implementations,
-    then combines per-player streams for multiplayer. Returns ``(b, t_a, d)`` conditioning ready
-    for ``denoise_streaming``.
+    then routes per-player streams for multiplayer. Returns global ``(b,t_a,d)`` or spatial
+    ``(b,t_a,h,w,d)`` conditioning ready for ``denoise_streaming``.
     """
     atd = inner.action_temporal_downsampling
     off = atd - 1
