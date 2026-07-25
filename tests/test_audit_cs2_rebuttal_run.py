@@ -175,6 +175,16 @@ def test_dataloader_contract_normalizes_legacy_defaults(tmp_path: Path) -> None:
     assert auditor._dataloader_config(legacy) == auditor._dataloader_config(explicit)
 
 
+def test_require_records_success_evidence_without_failure_label(tmp_path: Path) -> None:
+    auditor = AUDIT.Auditor(tmp_path)
+    optimizer = {"optimizer": {"lr": 1e-4}, "scheduler": {"warmup_steps": 500}}
+    evidence = {"single": optimizer, "shared": optimizer}
+
+    auditor.require("arms.identical_optimizer", evidence["single"] == evidence["shared"], evidence)
+
+    assert auditor.checks["arms.identical_optimizer"] == evidence
+
+
 def test_gpu_telemetry_parses_nvidia_smi_csv(tmp_path: Path) -> None:
     source = tmp_path / "provenance" / "gpu_timeseries.csv"
     source.parent.mkdir()

@@ -280,7 +280,11 @@ class Auditor:
             if single_inner.get(key) != shared_inner.get(key)
         }
         self.require("arms.identical_inner_model", not differences, differences)
-        self.require("arms.identical_optimizer", single["optim"] == shared["optim"], "optimizer mismatch")
+        self.require(
+            "arms.identical_optimizer",
+            single["optim"] == shared["optim"],
+            {"single": single["optim"], "shared": shared["optim"]},
+        )
         single_dataloader = self._dataloader_config(single)
         shared_dataloader = self._dataloader_config(shared)
         self.require(
