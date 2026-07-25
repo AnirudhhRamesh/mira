@@ -18,6 +18,11 @@ the untouched matched-information endpoint.
 - No match may cross train, validation, or test. All ten POV rows of a round remain in one split.
 - Input: 168x308 RGB, 16 frames at 8 fps. The codec has temporal stride 2, so the model receives
   eight latent frames covering two seconds.
+- Action alignment: release row `i` is target-frame aligned and describes the transition into
+  source video frame `i`. An emitted observation at source frame `t` is therefore conditioned on
+  interval-reduced action rows `t+1` through `t+4`: buttons are OR-reduced and
+  `(delta_yaw, delta_pitch)` is summed. No extra normalization is applied before MIRA's unchanged
+  native action encoder.
 
 The canonical selection digest, full-manifest digest, source shard list, payload counts, split
 statistics, and leakage check are written beside every run. Already materialized payloads may be
@@ -53,6 +58,22 @@ The semantic selection digest is
 manifest and provenance are verified independently on every training node before launch. Any
 change to the salt, selected identifiers, split cardinalities, source-manifest digest, or semantic
 digest defines a different experiment.
+
+### Target-frame action-alignment correction (frozen 2026-07-25 UTC)
+
+Before training a model on the untouched confirmatory split, a cross-baseline audit against the
+released state transition established that the existing MIRA adapter began each four-row action
+interval at the observation row. The release contract is target-frame aligned, so that was one
+32-fps row early. The public adapter and its boundary calculations now use rows `t+1` through
+`t+4`, with a poison-row regression test proving that row `t` cannot leak into the action for
+observation `t`.
+
+The completed 520-POV pilot and the validation-only spatial-routing gate used the earlier interval.
+They remain useful historical evidence about the single-model signal and the multiplayer routing
+failure/repair, respectively, but neither is relabeled as the corrected 690-POV baseline. The fresh
+single-POV baseline, all future confirmatory shared models, and every paper-facing action
+evaluation use the corrected adapter. This correction was committed before any new confirmatory
+model was trained or evaluated.
 
 ## Pilot question: single versus shared MIRA
 

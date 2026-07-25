@@ -91,6 +91,53 @@ def test_counterstrike_action_aggregation_and_video_subdir(tmp_path, monkeypatch
     assert batch.actions.mouse_movements[0].tolist() == [[4.0, -2.0], [4.0, -2.0]]
     assert torch.isnan(batch.actions.game_mouse_sensitivity).all()
     assert metadata[0].sample_key.endswith("__p00")
+    assert metadata[0].source_start_frame == 11
+    assert metadata[0].frame_indices == [11, 15]
+
+
+def test_counterstrike_actions_start_one_row_after_observation(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    root = _fixture(tmp_path)
+    sample_key = "match_000000000000__r001__p00"
+    action_path = root / "actions" / f"{sample_key}.actions.bin"
+    actions = np.zeros(32, dtype=CS2_ACTION_DTYPE)
+    # The first-death fixture starts at observation frame 6. Row 6 is poison:
+    # target-aligned reduction must use rows 7..10, never the observation row.
+    actions[6]["buttons"] = 1 << 11
+    actions[6]["delta_yaw"] = 1000.0
+    actions[7]["buttons"] = 1 << 0
+    actions[10]["buttons"] = 1 << 7
+    actions[7:11]["delta_yaw"] = 1.0
+    actions[7:11]["delta_pitch"] = -0.5
+    actions.tofile(action_path)
+    monkeypatch.setattr(
+        "mira.data.counterstrike.decode_frames",
+        lambda _path, indices, frame_size: torch.zeros(
+            len(indices),
+            3,
+            *frame_size,
+            dtype=torch.uint8,
+        ),
+    )
+
+    batch, metadata = next(
+        iter(
+            _loader(
+                root,
+                mode="single",
+                n_players=1,
+                window_mode="first-death",
+            )
+        )
+    )
+
+    assert metadata[0].source_start_frame == 6
+    assert batch.actions.key_presses[0, 0, 0] == 1
+    assert batch.actions.key_presses[0, 0, 7] == 1
+    assert batch.actions.key_presses[0, 0, 11] == 0
+    assert batch.actions.mouse_movements[0, 0].tolist() == [4.0, -2.0]
 
 
 def test_synchronized_and_shuffled_controls(tmp_path, monkeypatch) -> None:

@@ -234,6 +234,16 @@ def main() -> None:
     provenance = {
         "map_slug": args.map_slug,
         "splits_filter": sorted(set(args.splits or [])) or None,
+        "action_contract": {
+            "source_fps": 32,
+            "target_fps": 8,
+            "target_frame_offset": 1,
+            "source_rows_per_target_step": 4,
+            "interval": "observation t uses target-aligned rows t+1..t+4",
+            "buttons": "bitwise_or",
+            "mouse": "sum(delta_yaw,delta_pitch)",
+            "normalization": "none before the native MIRA action encoder",
+        },
         "full_manifest": str(full_manifest),
         "full_manifest_sha256": _sha256(full_manifest),
         "selection_sha256": hashlib.sha256(canonical_rows.encode()).hexdigest(),

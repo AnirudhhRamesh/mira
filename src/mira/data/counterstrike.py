@@ -14,8 +14,11 @@ synchronized.  This module deliberately supports three experimental units:
     architecture, row/token count and action count while destroying cross-POV
     synchronization.  This is the matched-information rebuttal control.
 
-The source records actions at 32 fps.  When clips are downsampled, button states
-are OR-reduced and angular deltas are summed over each source interval.  Mouse
+The source records target-frame-aligned actions at 32 fps: action row ``i``
+describes the transition into video frame ``i``.  For an emitted observation
+at source frame ``t``, the following transition therefore aggregates rows
+``t+1`` through ``t+4`` at the frozen 8 fps target rate.  Button states are
+OR-reduced and angular deltas are summed over that interval.  Mouse
 conditioning is ``(delta_yaw, delta_pitch)``: horizontal then vertical, with
 the signs and degree units in the released action stream preserved.
 """
@@ -53,6 +56,7 @@ CS2_KEYS = (
     "USE",
 )
 CS2_SOURCE_FPS = 32
+CS2_ACTION_TARGET_OFFSET = 1
 CS2_ACTION_DTYPE = np.dtype(
     [
         ("tick", "<u4"),
@@ -255,10 +259,12 @@ class CounterStrike1KIterable(IterableDataset):
         self.seed = seed
 
         longest_common = max(min(row.frames for row in rows) for rows in self.rounds)
-        if self.required_source_frames > longest_common:
+        required_with_action_target = self.required_source_frames + CS2_ACTION_TARGET_OFFSET
+        if required_with_action_target > longest_common:
             raise ValueError(
                 f"Requested {clip_len} frames @ {target_fps} fps needs "
-                f"{self.required_source_frames} source frames, but the longest complete synchronized "
+                f"{required_with_action_target} target-aligned source rows, but "
+                "the longest complete synchronized "
                 f"round has {longest_common}"
             )
 
@@ -269,7 +275,7 @@ class CounterStrike1KIterable(IterableDataset):
         return list(range(len(self.rounds)))[rank::world_size][worker_id::num_workers]
 
     def _start(self, max_frames: int, rng: random.Random) -> int:
-        max_start = max_frames - self.required_source_frames
+        max_start = max_frames - self.required_source_frames - CS2_ACTION_TARGET_OFFSET
         if max_start < 0:
             raise ValueError("Internal error: attempted to sample a clip from a short POV")
         # A fixed midpoint makes validation repeatable even though its iterator is infinite.
@@ -293,7 +299,7 @@ class CounterStrike1KIterable(IterableDataset):
         )
         if not anchors:
             return None
-        max_start = max_frames - self.required_source_frames
+        max_start = max_frames - self.required_source_frames - CS2_ACTION_TARGET_OFFSET
         return min(max(anchors[0] - self.required_source_frames // 2, 0), max_start)
 
     def _plans_for_round(
@@ -306,7 +312,7 @@ class CounterStrike1KIterable(IterableDataset):
         rows = self.rounds[round_idx]
         if self.group_mode == "single":
             common_frames = min(row.frames for row in rows)
-            if common_frames < self.required_source_frames:
+            if common_frames < self.required_source_frames + CS2_ACTION_TARGET_OFFSET:
                 return
             if self.window_mode != "midpoint":
                 start = self._event_start(rows, common_frames)
@@ -321,7 +327,7 @@ class CounterStrike1KIterable(IterableDataset):
 
         if self.group_mode == "synchronized":
             common_frames = min(row.frames for row in rows)
-            if common_frames < self.required_source_frames:
+            if common_frames < self.required_source_frames + CS2_ACTION_TARGET_OFFSET:
                 return
             shared_start = (
                 self._start(common_frames, rng)
@@ -341,7 +347,7 @@ class CounterStrike1KIterable(IterableDataset):
         for pov_idx in range(self.n_players):
             source_round_idx = control_order[(round_idx + pov_idx) % len(self.rounds)]
             row = self.rounds[source_round_idx][pov_idx]
-            if row.frames < self.required_source_frames:
+            if row.frames < self.required_source_frames + CS2_ACTION_TARGET_OFFSET:
                 return
             plans.append((row, self._start(row.frames, rng)))
         yield plans
@@ -365,12 +371,17 @@ class CounterStrike1KIterable(IterableDataset):
             raise FileNotFoundError(f"Missing CounterStrike-1K actions: {actions_path}")
 
         raw = np.fromfile(actions_path, dtype=CS2_ACTION_DTYPE)
-        end = start + self.required_source_frames
+        action_start = start + CS2_ACTION_TARGET_OFFSET
+        end = action_start + self.required_source_frames
         if end > len(raw):
             raise ValueError(
-                f"{actions_path} has {len(raw)} action records, but frames [{start}:{end}] were requested"
+                f"{actions_path} has {len(raw)} action records, but target-aligned "
+                f"rows [{action_start}:{end}] were requested"
             )
-        windows = raw[start:end].reshape(self.clip_len, self.source_stride)
+        windows = raw[action_start:end].reshape(
+            self.clip_len,
+            self.source_stride,
+        )
         button_masks = np.bitwise_or.reduce(windows["buttons"], axis=1)
         bit_indices = np.arange(len(CS2_KEYS), dtype=np.uint16)
         keys = ((button_masks[:, None] >> bit_indices[None, :]) & 1).astype(np.int32)
