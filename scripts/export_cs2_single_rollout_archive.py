@@ -6,9 +6,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
+
+# Deterministic CUDA matrix multiplication requires this to be set before
+# importing torch. Preserve an explicit caller choice of either valid workspace.
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 import numpy as np
 import torch
