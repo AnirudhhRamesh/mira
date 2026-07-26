@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 SCHEMA = "mira-dust2-live-review-v1"
+CONTROL_FRAGMENT_SCHEMA = "mira-dust2-gh200-review-fragment-v1"
 SAFE_PROVENANCE = (
     "code_commit.txt",
     "code_status.txt",
@@ -39,6 +40,137 @@ def utc_now() -> str:
 
 def object_key(prefix: str, relative: str | Path) -> str:
     return str(PurePosixPath(prefix.strip("/")) / PurePosixPath(str(relative).replace("\\", "/")))
+
+
+def _all_mapping_keys(value: Any) -> list[str]:
+    keys: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            keys.append(str(key))
+            keys.extend(_all_mapping_keys(item))
+    elif isinstance(value, list):
+        for item in value:
+            keys.extend(_all_mapping_keys(item))
+    return keys
+
+
+def _fragment_object_keys(value: Any) -> list[str]:
+    keys: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in {"object_key", "metrics_object_key"} and item is not None:
+                if not isinstance(item, str):
+                    raise TypeError(f"control fragment {key} must be a string")
+                keys.append(item)
+            else:
+                keys.extend(_fragment_object_keys(item))
+    elif isinstance(value, list):
+        for item in value:
+            keys.extend(_fragment_object_keys(item))
+    return keys
+
+
+def load_control_fragment(client, bucket: str, prefix: str) -> dict[str, Any] | None:
+    """Read and validate the optional private synchronized-control progress fragment."""
+    from botocore.exceptions import ClientError
+
+    fragment_key = object_key(prefix, "gh200/fragment.json")
+    try:
+        response = client.get_object(Bucket=bucket, Key=fragment_key)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+            return None
+        raise
+    body = response["Body"].read()
+    if len(body) > 5 * 1024 * 1024:
+        raise ValueError("control review fragment exceeds 5 MiB")
+    fragment = json.loads(body)
+    if not isinstance(fragment, dict):
+        raise TypeError("control review fragment must be a JSON object")
+    if fragment.get("schema") != CONTROL_FRAGMENT_SCHEMA:
+        raise ValueError("control review fragment schema drifted")
+    if fragment.get("bucket") != bucket:
+        raise ValueError("control review fragment bucket drifted")
+    expected_prefix = object_key(prefix, "gh200")
+    if fragment.get("object_prefix") != expected_prefix:
+        raise ValueError("control review fragment object prefix drifted")
+    if any(key == "url" for key in _all_mapping_keys(fragment)):
+        raise ValueError("control review fragment must contain object keys, not URLs")
+    allowed_prefix = expected_prefix.rstrip("/") + "/"
+    forbidden = ("checkpoint.pth", "training_state.pth", "/optimizer")
+    if any(
+        not key.startswith(allowed_prefix) or any(token in key.lower() for token in forbidden)
+        for key in _fragment_object_keys(fragment)
+    ):
+        raise ValueError("control review fragment contains an unsafe object reference")
+    privacy = fragment.get("privacy", {})
+    if (
+        privacy.get("browser_checkpoint_urls_issued") is not False
+        or privacy.get("training_state_uploaded") is not False
+    ):
+        raise ValueError("control review fragment violates the browser privacy contract")
+    return fragment
+
+
+def merge_control_fragment(
+    manifest: dict[str, Any],
+    fragment: dict[str, Any],
+    *,
+    client,
+    bucket: str,
+    expires_seconds: int,
+) -> dict[str, Any]:
+    """Overlay live synchronized-control progress while retaining completed endpoint evidence."""
+    completed_traces = json.loads(json.dumps(manifest.get("traces", [])))
+    completed_artifacts = json.loads(json.dumps(manifest.get("artifacts", [])))
+    object_keys = sorted(set(_fragment_object_keys(fragment)))
+    urls = {key: signed_url(client, bucket, key, expires_seconds) for key in object_keys}
+    traces = json.loads(json.dumps(fragment.get("traces", [])))
+    for trace in traces:
+        for video in trace.get("videos", []):
+            key = video.pop("object_key", None)
+            if key:
+                video["url"] = urls[key]
+        key = trace.pop("metrics_object_key", None)
+        trace["metrics_url"] = urls.get(key)
+    artifacts = json.loads(json.dumps(fragment.get("artifacts", [])))
+    for artifact in artifacts:
+        key = artifact.pop("object_key")
+        artifact["url"] = urls[key]
+
+    generated = datetime.fromisoformat(str(fragment["generated_at_utc"]).replace("Z", "+00:00"))
+    age_seconds = max(0.0, (datetime.now(UTC) - generated).total_seconds())
+    experiment = json.loads(json.dumps(fragment["experiment"]))
+    active_statuses = {"queued", "training", "evaluating"}
+    transport_status = (
+        "stale" if experiment.get("status") in active_statuses and age_seconds > 180 else "live"
+    )
+    experiment["review_transport_status"] = transport_status
+    experiment["review_fragment_age_seconds"] = round(age_seconds, 1)
+    if transport_status == "stale":
+        experiment["status_label"] = (
+            f"Review publisher stale for {int(age_seconds // 60)} minutes"
+        )
+
+    manifest.update(
+        {
+            "experiment": experiment,
+            "stages": fragment.get("stages", []),
+            "traces": completed_traces + traces,
+            "dataset": fragment["dataset"],
+            "telemetry": fragment["telemetry"],
+            "provenance": fragment["provenance"],
+            "artifacts": completed_artifacts + artifacts,
+            "control_fragment_generated_at_utc": fragment["generated_at_utc"],
+        }
+    )
+    manifest["privacy"] = {
+        **manifest["privacy"],
+        **fragment["privacy"],
+        "artifact_url_expiry_seconds": expires_seconds,
+        "bucket_public_access_blocked": True,
+    }
+    return manifest
 
 
 def assert_private_bucket(client, bucket: str) -> None:
@@ -304,7 +436,7 @@ def build_traces(
 
 
 def publish_once(args: argparse.Namespace) -> dict[str, Any]:
-    import boto3  # noqa: PLC0415 -- operational dependency, not needed for manifest unit tests
+    import boto3
 
     run_root = args.run_root.resolve()
     if not (run_root / "pipeline_status.tsv").is_file():
@@ -378,6 +510,15 @@ def publish_once(args: argparse.Namespace) -> dict[str, Any]:
             "artifact_url_expiry_seconds": args.artifact_url_expiry,
         },
     }
+    fragment = load_control_fragment(client, args.bucket, args.prefix)
+    if fragment is not None:
+        manifest = merge_control_fragment(
+            manifest,
+            fragment,
+            client=client,
+            bucket=args.bucket,
+            expires_seconds=args.artifact_url_expiry,
+        )
     payload = json.dumps(manifest, indent=2, sort_keys=True).encode()
     manifest_key = object_key(args.prefix, "manifest.json")
     client.put_object(
