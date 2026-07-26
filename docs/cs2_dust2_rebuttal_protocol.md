@@ -154,6 +154,17 @@ are for the one preregistered training seed, not independent training replicates
   69-round cluster-bootstrap CI of `[0.00659, 0.02893]`. The true-versus-zero separation was
   `+0.02157`, CI `[0.01374, 0.03616]`.
 
+The public CounterStrike-1K addendum at commit
+`b8d36e130796292c26cdb862cfae31cdea936e94` also exhaustively applies the same round bootstrap
+to every frozen action-probe label, using the already hashed score/label arrays without visual
+rescoring. For FIRE, true/shuffled/zero target ARR was `0.156/0.131/0.130` over 85 positive
+segments; the true-minus-shuffled estimate was `+0.0246`, CI `[-0.0158, 0.0636]`, so this
+per-event row is directional but inconclusive. RELOAD has only three positives and is unsupported.
+The complete 14-label addendum has SHA-256
+`87a6a47d303e3a611f36236037379bc62216bcc1de925f3aa0621532daed0dc6`. These are exhaustive
+post-test diagnostics, not replacements for the preregistered macro endpoint or
+multiple-testing-corrected claims.
+
 These three measurements answer different failure modes. Native loss establishes that this MIRA
 checkpoint uses the aligned controls; RAFT shows that the benefit reaches generated camera/world
 motion; and temporal action recoverability gives action-semantic evidence beyond pixels and flow.
