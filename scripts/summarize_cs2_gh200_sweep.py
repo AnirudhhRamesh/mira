@@ -91,7 +91,7 @@ def summarize(root: Path) -> dict[str, Any]:
     death_action_summaries: list[dict[str, Any]] = []
     for seed_root in seed_roots:
         audit = _read(seed_root / "audit.json")
-        if audit.get("schema") != "mira-cs2-gh200-sync-control-audit-v1":
+        if audit.get("schema") != "mira-cs2-gh200-sync-control-audit-v2":
             raise ValueError(f"{seed_root}: unexpected child audit schema")
         if audit.get("status") != "pass":
             raise ValueError(f"{seed_root}: child audit did not pass")
@@ -119,8 +119,12 @@ def summarize(root: Path) -> dict[str, Any]:
         raise ValueError(f"Training seeds are not unique: {training_seeds}")
     commits = {audit["training_commit"] for audit in audits}
     manifests = {audit["manifest_sha256"] for audit in audits}
-    if len(commits) != 1 or len(manifests) != 1:
-        raise ValueError(f"Training runs drifted in code or data: commits={commits}, manifests={manifests}")
+    train_steps = {audit["train_steps"] for audit in audits}
+    if len(commits) != 1 or len(manifests) != 1 or len(train_steps) != 1:
+        raise ValueError(
+            "Training runs drifted in code, data, or fixed update budget: "
+            f"commits={commits}, manifests={manifests}, train_steps={train_steps}"
+        )
     checkpoint_pairs = {
         (
             summary["contract"]["shuffled_checkpoint_sha256"],
@@ -219,11 +223,12 @@ def summarize(root: Path) -> dict[str, Any]:
     )
 
     return {
-        "schema": "mira-cs2-gh200-sync-control-sweep-v1",
+        "schema": "mira-cs2-gh200-sync-control-sweep-v2",
         "status": "pass",
         "independent_unit": "training_seed",
         "training_seeds": training_seeds,
         "training_commit": next(iter(commits)),
+        "train_steps": next(iter(train_steps)),
         "manifest_sha256": next(iter(manifests)),
         "arm_order_counts": {
             ",".join(first_order): order_counts[first_order],

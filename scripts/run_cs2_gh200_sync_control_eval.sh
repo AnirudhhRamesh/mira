@@ -235,7 +235,7 @@ done
   --arm-b-training-group-mode synchronized \
   --expected-action-routing spatial
 
-arm_hours=$(
+read -r train_steps arm_hours < <(
   "$python_bin" - "$synchronized_checkpoint" <<'PY'
 import sys
 from pathlib import Path
@@ -244,11 +244,12 @@ import yaml
 
 checkpoint = Path(sys.argv[1]).resolve()
 config = yaml.safe_load((checkpoint.parents[1] / "world_model_config.yaml").read_text())
-print(config["run"]["max_duration_hours"])
+print(config["run"]["steps"], config["run"]["max_duration_hours"])
 PY
 )
 "$python_bin" scripts/audit_cs2_gh200_sync_control.py "$training_root" \
   --manifest "$manifest_path" \
   --split-provenance "$split_provenance" \
+  --train-steps "$train_steps" \
   --arm-hours "$arm_hours" \
   --expected-training-commit "$(git rev-parse HEAD)"

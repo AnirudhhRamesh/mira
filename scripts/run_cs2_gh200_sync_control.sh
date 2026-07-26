@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Four-node GH200 synchronized-vs-shuffled matched-information ablation.
+# Four-node GH200 synchronized-vs-cross-round-grouped matched-information ablation.
 #
 # The publication path launches this script once per node through Slurm. Each arm uses the
 # identical ten-player architecture, global batch, action/video volume, seed, GPU topology, and
-# wall-clock budget; only whether the ten POVs come from the same synchronized round changes.
+# optimizer-update budget; only whether the ten POVs come from the same synchronized round changes.
+# The wall-clock setting is a fail-closed safety cap, not the compute-matching variable.
 set -euo pipefail
 
 project_dir=${MIRA_PROJECT_DIR:-$PWD}
@@ -12,8 +13,13 @@ manifest_path=${CS1K_MANIFEST_PATH:?Set the frozen confirmatory manifest path on
 split_provenance=${CS1K_CONFIRMATORY_SPLIT_PROVENANCE:?Set the frozen split provenance on every node}
 codec_checkpoint=${CS1K_CODEC_CHECKPOINT:?Set CS1K_CODEC_CHECKPOINT on every node}
 output_root=${CS1K_OUTPUT_ROOT:?Set CS1K_OUTPUT_ROOT to a shared result directory}
-arm_hours=${CS1K_ARM_HOURS:?Set the per-arm wall-clock budget}
+train_steps=${CS1K_TRAIN_STEPS:?Set the identical optimizer-update count for both arms}
+arm_hours=${CS1K_ARM_HOURS:?Set the per-arm fail-closed wall-clock cap}
 seed=${CS1K_SEED:-28}
+if ! [[ "$train_steps" =~ ^[1-9][0-9]*$ ]]; then
+  echo "CS1K_TRAIN_STEPS must be a positive integer" >&2
+  exit 1
+fi
 if ! [[ "$seed" =~ ^[0-9]+$ ]]; then
   echo "CS1K_SEED must be a non-negative integer" >&2
   exit 1
@@ -210,6 +216,7 @@ nvidia-smi -q >"$node_provenance/nvidia_smi_q.txt"
 uname -a >"$node_provenance/uname.txt"
 printf '%s\n' \
   "seed=$seed" \
+  "train_steps=$train_steps" \
   "arm_hours=$arm_hours" \
   "arm_order=$arm_order" \
   "nnodes=$nnodes" \
@@ -271,6 +278,8 @@ write_status() {
 
 for arm in "${arms[@]}"; do
   write_status "$arm" running
+  arm_started_epoch=$(date +%s)
+  arm_started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   "$torchrun_bin" "${torchrun_args[@]}" scripts/train_world_model.py \
     model=multi_wrapper_world_model_cs2_small \
     dataset=counterstrike1k_dust2 \
@@ -282,7 +291,7 @@ for arm in "${arms[@]}"; do
     model.architecture.config.action_routing=spatial \
     model.architecture.config.wm_config.codec_checkpoint="$codec_checkpoint" \
     run.seed="$seed" \
-    run.steps=100000000 \
+    run.steps="$train_steps" \
     run.batch_size=1 \
     run.deterministic=true \
     run.compile=false \
@@ -312,7 +321,64 @@ for arm in "${arms[@]}"; do
     world_model_metrics.num_samples=40 \
     world_model_metrics.per_device_batch_size=1 \
     world_model_metrics.num_viz_samples=2 \
-    wandb.mode=disabled
+    wandb.mode=disabled \
+    hydra.run.dir="$experiment_root/hydra/$arm/node_$node_rank"
+  final_step=$((train_steps - 1))
+  final_checkpoint=$experiment_root/$arm/checkpoint-$final_step/checkpoint.pth
+  if [[ ! -s "$final_checkpoint" ]]; then
+    echo "Arm $arm did not reach the required $train_steps optimizer updates: $final_checkpoint missing" >&2
+    exit 1
+  fi
+  if grep -q '"kind": "time_limit"' "$experiment_root/$arm/metrics.jsonl"; then
+    echo "Arm $arm hit the safety wall-clock cap before the fixed-step endpoint" >&2
+    exit 1
+  fi
+  if [[ "$node_rank" == 0 ]]; then
+    arm_ended_epoch=$(date +%s)
+    arm_ended_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    "$python_bin" - \
+      "$experiment_root/$arm/training_termination.json.tmp" \
+      "$arm" \
+      "$train_steps" \
+      "$final_step" \
+      "$arm_started_utc" \
+      "$arm_ended_utc" \
+      "$((arm_ended_epoch - arm_started_epoch))" \
+      "$arm_hours" \
+      "$final_checkpoint" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+(
+    output,
+    arm,
+    train_steps,
+    final_step,
+    started_utc,
+    ended_utc,
+    elapsed_seconds,
+    max_duration_hours,
+    checkpoint,
+) = sys.argv[1:]
+payload = {
+    "schema": "mira-cs2-fixed-step-termination-v1",
+    "arm": arm,
+    "termination": "fixed_step_complete",
+    "optimizer_updates": int(train_steps),
+    "final_step": int(final_step),
+    "launcher_elapsed_wall_seconds": int(elapsed_seconds),
+    "max_duration_hours": float(max_duration_hours),
+    "started_utc": started_utc,
+    "ended_utc": ended_utc,
+    "checkpoint": str(Path(checkpoint).resolve()),
+}
+Path(output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+    mv \
+      "$experiment_root/$arm/training_termination.json.tmp" \
+      "$experiment_root/$arm/training_termination.json"
+  fi
   write_status "$arm" complete
 done
 

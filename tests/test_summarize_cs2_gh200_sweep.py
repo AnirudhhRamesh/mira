@@ -32,10 +32,11 @@ def _write_seed(root: Path, seed: int, order: tuple[str, str], delta: float) -> 
     action_root.mkdir(parents=True)
     death_action_root.mkdir(parents=True)
     audit = {
-        "schema": "mira-cs2-gh200-sync-control-audit-v1",
+        "schema": "mira-cs2-gh200-sync-control-audit-v2",
         "status": "pass",
         "seed": seed,
         "training_commit": COMMIT,
+        "train_steps": 10_000,
         "manifest_sha256": MANIFEST,
         "arm_order": list(order),
     }
@@ -98,6 +99,7 @@ def test_summarize_uses_training_seed_as_independent_unit(tmp_path: Path) -> Non
     assert psnr["n_training_seeds"] == 3
     assert psnr["mean"] == 2.0
     assert result["independent_unit"] == "training_seed"
+    assert result["train_steps"] == 10_000
     assert result["arm_order_counts"]["synchronized,shuffled"] == 2
     paired_action = result["paired_action_sensitivity"]["test/loss_total"]["zero"][
         "training_seed_summary_of_eval_seed_means"
@@ -114,4 +116,17 @@ def test_summarize_rejects_uncounterbalanced_order(tmp_path: Path) -> None:
         _write_seed(tmp_path, seed, ("synchronized", "shuffled"), float(seed))
 
     with pytest.raises(ValueError, match="not counterbalanced"):
+        SUMMARY.summarize(tmp_path)
+
+
+def test_summarize_rejects_fixed_update_budget_drift(tmp_path: Path) -> None:
+    _write_seed(tmp_path, 28, ("synchronized", "shuffled"), 1.0)
+    _write_seed(tmp_path, 29, ("shuffled", "synchronized"), 2.0)
+    _write_seed(tmp_path, 30, ("synchronized", "shuffled"), 3.0)
+    audit_path = tmp_path / "seed_30" / "audit.json"
+    audit = json.loads(audit_path.read_text())
+    audit["train_steps"] = 20_000
+    audit_path.write_text(json.dumps(audit), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="fixed update budget"):
         SUMMARY.summarize(tmp_path)

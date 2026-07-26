@@ -15,6 +15,7 @@ def test_gh200_shell_entrypoints_parse() -> None:
         ROOT / "scripts" / "run_cs2_gh200_slurm_seed.sh",
         ROOT / "scripts" / "run_cs2_gh200_sync_control.sh",
         ROOT / "scripts" / "run_cs2_gh200_sync_control_eval.sh",
+        ROOT / "scripts" / "run_cs2_g7e_sync_control_preflight.sh",
     ]
     subprocess.run(["bash", "-n", *map(str, scripts)], check=True)
 
@@ -27,6 +28,7 @@ def test_publication_launcher_rejects_non_slurm_invocation() -> None:
         "CS1K_CONFIRMATORY_SPLIT_PROVENANCE": "/nonexistent/split.json",
         "CS1K_CODEC_CHECKPOINT": "/nonexistent/codec.pth",
         "CS1K_OUTPUT_ROOT": "/nonexistent/output",
+        "CS1K_TRAIN_STEPS": "10000",
         "CS1K_ARM_HOURS": "12",
         "CS1K_DATALOADER_WORKERS": "8",
         "CS1K_DATALOADER_PREFETCH_FACTOR": "2",
@@ -61,3 +63,20 @@ def test_slurm_orchestrator_requests_exact_four_by_one_topology() -> None:
     assert "--num-workers auto" in text
     assert "--expected-host-count 4" in text
     assert "run_cs2_gh200_sync_control_eval.sh" in text
+    assert "CS1K_TRAIN_STEPS" in text
+
+
+def test_publication_launcher_uses_fixed_steps_and_external_hydra_output() -> None:
+    text = (ROOT / "scripts" / "run_cs2_gh200_sync_control.sh").read_text()
+    assert 'run.steps="$train_steps"' in text
+    assert "run.steps=100000000" not in text
+    assert 'hydra.run.dir="$experiment_root/hydra/$arm/node_$node_rank"' in text
+    assert '"kind": "time_limit"' in text
+
+
+def test_g7e_preflight_uses_the_same_fixed_step_endpoint_contract() -> None:
+    text = (ROOT / "scripts" / "run_cs2_g7e_sync_control_preflight.sh").read_text()
+    assert 'run.steps="$train_steps"' in text
+    assert "run.steps=100000000" not in text
+    assert "checkpoint-$((train_steps - 1))/checkpoint.pth" in text
+    assert 'hydra.run.dir="$output_root/hydra/$arm"' in text

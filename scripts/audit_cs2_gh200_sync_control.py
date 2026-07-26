@@ -79,6 +79,7 @@ class Auditor:
     root: Path
     manifest: Path
     split_provenance: Path
+    train_steps: int
     arm_hours: float
     expected_training_commit: str | None = None
     checks: dict[str, Any] = field(default_factory=dict)
@@ -310,6 +311,7 @@ class Auditor:
         )
         common_launcher_fields = (
             "seed",
+            "train_steps",
             "arm_hours",
             "arm_order",
             "nnodes",
@@ -342,6 +344,11 @@ class Auditor:
             "topology.four_by_one",
             launcher["nnodes"] == "4" and launcher["nproc_per_node"] == "1",
             [launcher["nnodes"], launcher["nproc_per_node"]],
+        )
+        self.require(
+            "launcher.train_steps",
+            int(launcher["train_steps"]) == self.train_steps,
+            launcher["train_steps"],
         )
         self.require(
             "launcher.arm_hours",
@@ -394,9 +401,11 @@ class Auditor:
             routing = config["model"]["architecture"]["config"]["action_routing"]
             expected = {
                 "seed": seed,
+                "steps": self.train_steps,
                 "batch_size": 1,
                 "deterministic": True,
                 "max_duration_hours": self.arm_hours,
+                "continue_from": None,
             }
             for key, value in expected.items():
                 self.require(f"{arm}.run.{key}", run.get(key) == value, run.get(key))
@@ -448,11 +457,29 @@ class Auditor:
             traces = [row for row in rows if row.get("kind") == "rollout_trace"]
             limits = [row for row in rows if row.get("kind") == "time_limit"]
             self.require(f"{arm}.train_metrics", bool(train), len(train))
-            self.require(f"{arm}.time_limit_count", len(limits) == 1, len(limits))
-            elapsed = float(limits[0]["elapsed_wall_seconds"])
+            self.require(f"{arm}.time_limit_count", len(limits) == 0, len(limits))
+            termination = _read_json(stage / "training_termination.json")
+            final_step = self.train_steps - 1
+            checkpoint = stage / f"checkpoint-{final_step}" / "checkpoint.pth"
+            expected_termination = {
+                "schema": "mira-cs2-fixed-step-termination-v1",
+                "arm": arm,
+                "termination": "fixed_step_complete",
+                "optimizer_updates": self.train_steps,
+                "final_step": final_step,
+                "max_duration_hours": self.arm_hours,
+                "checkpoint": str(checkpoint.resolve()),
+            }
+            for key, value in expected_termination.items():
+                self.require(
+                    f"{arm}.termination.{key}",
+                    termination.get(key) == value,
+                    termination.get(key),
+                )
+            elapsed = float(termination["launcher_elapsed_wall_seconds"])
             self.require(
-                f"{arm}.wall_clock",
-                self.arm_hours * 3600 <= elapsed <= self.arm_hours * 3600 + 30,
+                f"{arm}.launcher_elapsed_wall_seconds",
+                math.isfinite(elapsed) and elapsed > 0,
                 elapsed,
             )
             expected_trace_steps = {int(row["step"]) for row in validations if int(row["step"]) % 1000 == 0}
@@ -475,8 +502,6 @@ class Auditor:
                 video = trace_root / "rollout.mp4"
                 self.require(f"{arm}.rollout.{step}.video", video.stat().st_size > 0, video.stat().st_size)
 
-            final_step = int(limits[0]["step"])
-            checkpoint = stage / f"checkpoint-{final_step}" / "checkpoint.pth"
             self.require(f"{arm}.checkpoint", checkpoint.stat().st_size > 0, str(checkpoint))
             last_train = train[-1]
             expected_frames = (int(last_train["step"]) + 1) * GLOBAL_FRAMES_PER_STEP
@@ -491,8 +516,10 @@ class Auditor:
             results[arm] = {
                 "checkpoint": str(checkpoint.resolve()),
                 "checkpoint_sha256": _sha256(checkpoint),
-                "time_limit_step": final_step,
-                "elapsed_wall_seconds": elapsed,
+                "final_step": final_step,
+                "optimizer_updates": self.train_steps,
+                "processed_frames": self.train_steps * GLOBAL_FRAMES_PER_STEP,
+                "launcher_elapsed_wall_seconds": elapsed,
                 "rollout_steps": sorted(observed_trace_steps),
             }
         self.require(
@@ -504,6 +531,16 @@ class Auditor:
             "arms.identical_optimizer",
             arm_configs["shuffled"]["optim"] == arm_configs["synchronized"]["optim"],
             "optimizer configs differ",
+        )
+        self.require(
+            "arms.identical_optimizer_updates",
+            all(results[arm]["optimizer_updates"] == self.train_steps for arm in ARMS),
+            {arm: results[arm]["optimizer_updates"] for arm in ARMS},
+        )
+        self.require(
+            "arms.identical_processed_frames",
+            len({results[arm]["processed_frames"] for arm in ARMS}) == 1,
+            {arm: results[arm]["processed_frames"] for arm in ARMS},
         )
         return results
 
@@ -716,12 +753,13 @@ class Auditor:
         checkpoints = self.audit_training(seed, loader)
         evaluation = self.audit_evaluation(commit, checkpoints)
         return {
-            "schema": "mira-cs2-gh200-sync-control-audit-v1",
+            "schema": "mira-cs2-gh200-sync-control-audit-v2",
             "status": "pass",
             "experiment_root": str(self.root.resolve()),
             "training_commit": commit,
             "seed": seed,
             "arm_order": list(order),
+            "train_steps": self.train_steps,
             "manifest_sha256": EXPECTED_MANIFEST_SHA256,
             "checkpoints": checkpoints,
             "evaluation": evaluation,
@@ -734,6 +772,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("experiment_root", type=Path)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--split-provenance", type=Path, required=True)
+    parser.add_argument("--train-steps", type=int, required=True)
     parser.add_argument("--arm-hours", type=float, required=True)
     parser.add_argument("--expected-training-commit")
     parser.add_argument("--output", type=Path)
@@ -746,6 +785,7 @@ def main() -> None:
         root=args.experiment_root,
         manifest=args.manifest,
         split_provenance=args.split_provenance,
+        train_steps=args.train_steps,
         arm_hours=args.arm_hours,
         expected_training_commit=args.expected_training_commit,
     ).run()

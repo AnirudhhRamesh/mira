@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 def _load_module():
@@ -56,6 +57,7 @@ def _auditor(tmp_path: Path, monkeypatch) -> AUDIT.Auditor:
         root=tmp_path / "seed_28",
         manifest=manifest,
         split_provenance=split_provenance,
+        train_steps=10_000,
         arm_hours=12.0,
         expected_training_commit=COMMIT,
     )
@@ -85,6 +87,7 @@ def test_audit_nodes_requires_identical_four_node_contract(tmp_path: Path, monke
     }
     launcher = {
         "seed": "28",
+        "train_steps": "10000",
         "arm_hours": "12.0",
         "arm_order": "synchronized,shuffled",
         "nnodes": "4",
@@ -196,6 +199,114 @@ def test_audit_nodes_requires_identical_four_node_contract(tmp_path: Path, monke
     (auditor.root / "provenance" / "node_3" / "gpu_timeseries.csv").write_text("header\n", encoding="utf-8")
     with pytest.raises(ValueError, match="node_3.telemetry"):
         auditor.audit_nodes()
+
+
+def _write_fixed_step_training_arm(
+    auditor: AUDIT.Auditor,
+    arm: str,
+    loader: dict,
+) -> None:
+    stage = auditor.root / arm
+    stage.mkdir(parents=True)
+    config = {
+        "run": {
+            "seed": 28,
+            "steps": auditor.train_steps,
+            "batch_size": 1,
+            "deterministic": True,
+            "max_duration_hours": auditor.arm_hours,
+            "continue_from": None,
+        },
+        "dataset": {
+            "map_slug": "dust2",
+            "n_players": 10,
+            "group_mode": arm,
+            "train_index": str(auditor.manifest),
+            "test_index": str(auditor.manifest),
+            "train_split": "train",
+            "test_split": "val",
+            "validation_group_mode": "synchronized",
+        },
+        "model": {
+            "architecture": {
+                "config": {
+                    "action_routing": "spatial",
+                }
+            }
+        },
+        "dataloader": loader,
+        "validation": {
+            "val_first": True,
+            "val_every": 1000,
+            "val_n_samples": 40,
+            "local_rollout_every": 1000,
+            "local_rollout_seed": 37,
+        },
+        "optim": {"optimizer": {"lr": 1e-4}},
+    }
+    (stage / "world_model_config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    rows = [
+        {
+            "kind": "train",
+            "step": 0,
+            "System/n_frames_processed": AUDIT.GLOBAL_FRAMES_PER_STEP,
+        },
+        {"kind": "validation", "step": 0},
+        {"kind": "rollout_trace", "step": 0},
+    ]
+    (stage / "metrics.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    trace = stage / "rollout_traces" / "step-000000000"
+    trace.mkdir(parents=True)
+    (trace / "metadata.json").write_text(
+        json.dumps({"seed": 37, "split": "val", "action_routing": "spatial"}),
+        encoding="utf-8",
+    )
+    (trace / "rollout.mp4").write_bytes(b"video")
+    final_step = auditor.train_steps - 1
+    checkpoint = stage / f"checkpoint-{final_step}" / "checkpoint.pth"
+    checkpoint.parent.mkdir()
+    checkpoint.write_bytes(f"{arm}-checkpoint".encode())
+    termination = {
+        "schema": "mira-cs2-fixed-step-termination-v1",
+        "arm": arm,
+        "termination": "fixed_step_complete",
+        "optimizer_updates": auditor.train_steps,
+        "final_step": final_step,
+        "launcher_elapsed_wall_seconds": 1234,
+        "max_duration_hours": auditor.arm_hours,
+        "checkpoint": str(checkpoint.resolve()),
+    }
+    (stage / "training_termination.json").write_text(json.dumps(termination), encoding="utf-8")
+
+
+def test_training_audit_requires_fixed_matched_updates_and_no_time_limit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    auditor = _auditor(tmp_path, monkeypatch)
+    loader = {
+        "num_workers": 8,
+        "prefetch_factor": 2,
+        "persistent_workers": True,
+        "pin_memory": True,
+    }
+    for arm in AUDIT.ARMS:
+        _write_fixed_step_training_arm(auditor, arm, loader)
+
+    result = auditor.audit_training(seed=28, loader_config=loader)
+
+    expected_frames = auditor.train_steps * AUDIT.GLOBAL_FRAMES_PER_STEP
+    assert result["synchronized"]["optimizer_updates"] == auditor.train_steps
+    assert result["shuffled"]["processed_frames"] == expected_frames
+
+    metrics = auditor.root / "shuffled" / "metrics.jsonl"
+    with metrics.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"kind": "time_limit", "step": 123}) + "\n")
+    with pytest.raises(ValueError, match="shuffled.time_limit_count"):
+        auditor.audit_training(seed=28, loader_config=loader)
 
 
 def test_audits_complete_first_death_action_grid(tmp_path: Path, monkeypatch) -> None:

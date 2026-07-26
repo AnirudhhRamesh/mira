@@ -5,9 +5,10 @@
 #   sbatch --nodes=4 --ntasks-per-node=1 --gpus-per-node=1 ... \
 #     scripts/run_cs2_gh200_slurm_seed.sh
 #
-# Required CS1K_* paths and the per-arm wall-clock budget must be exported with --export or by the
-# batch environment. The script benchmarks every allocated node, freezes one deterministic loader
-# configuration across all 12+ repeats, trains both arms, evaluates the untouched test, and audits.
+# Required CS1K_* paths, fixed optimizer-update count, and fail-closed wall-clock cap must be
+# exported with --export or by the batch environment. The script benchmarks every allocated node,
+# freezes one deterministic loader configuration across all 12+ repeats, trains both arms,
+# evaluates the untouched test, and audits.
 set -euo pipefail
 
 project_dir=${MIRA_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
@@ -17,7 +18,8 @@ manifest_path=${CS1K_MANIFEST_PATH:?Set CS1K_MANIFEST_PATH}
 split_provenance=${CS1K_CONFIRMATORY_SPLIT_PROVENANCE:?Set split provenance}
 codec_checkpoint=${CS1K_CODEC_CHECKPOINT:?Set CS1K_CODEC_CHECKPOINT}
 output_root=${CS1K_OUTPUT_ROOT:?Set CS1K_OUTPUT_ROOT}
-arm_hours=${CS1K_ARM_HOURS:?Set CS1K_ARM_HOURS}
+train_steps=${CS1K_TRAIN_STEPS:?Set CS1K_TRAIN_STEPS}
+arm_hours=${CS1K_ARM_HOURS:?Set CS1K_ARM_HOURS as a safety cap}
 seed=${CS1K_SEED:-28}
 prefetch_factor=${CS1K_DATALOADER_PREFETCH_FACTOR:-2}
 persistent_workers=${CS1K_DATALOADER_PERSISTENT_WORKERS:-true}
@@ -33,6 +35,10 @@ if [[ "$slurm_nodes" != 4 ]]; then
 fi
 if ! [[ "$seed" =~ ^[0-9]+$ ]]; then
   echo "CS1K_SEED must be a non-negative integer" >&2
+  exit 1
+fi
+if ! [[ "$train_steps" =~ ^[1-9][0-9]*$ ]]; then
+  echo "CS1K_TRAIN_STEPS must be a positive integer" >&2
   exit 1
 fi
 for command_name in scontrol srun sha256sum; do
@@ -143,6 +149,7 @@ export CS1K_GLOBAL_LOADER_SELECTION="$selection_path"
 export CS1K_CONFIRMATORY_SPLIT_PROVENANCE="$split_provenance"
 export CS1K_CODEC_CHECKPOINT="$codec_checkpoint"
 export CS1K_OUTPUT_ROOT="$output_root"
+export CS1K_TRAIN_STEPS="$train_steps"
 export CS1K_ARM_HOURS="$arm_hours"
 export CS1K_SEED="$seed"
 export CS1K_REQUIRE_SLURM=true

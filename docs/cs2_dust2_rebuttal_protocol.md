@@ -216,21 +216,26 @@ batched attention do not have equal FLOP scaling, the report must also disclose 
 processed POV frames, throughput, parameter counts, and peak memory. The pilot is evidence about
 the released training path, not by itself a causal estimate of synchronization.
 
-## Confirmatory question: synchronization versus matched shuffled information
+## Confirmatory question: synchronization versus matched cross-round grouping
 
 Question: holding the ten-player architecture and information volume fixed, does training on POVs
 from the same synchronized round improve prediction relative to ten POVs drawn from different
 rounds?
 
-`group_mode=synchronized` and `group_mode=shuffled` use:
+`group_mode=synchronized` and the historical internal name `group_mode=shuffled` use:
 
 - the same ten-player wrapper with `action_routing=spatial`, token/action counts, global batch,
-  codec, initialization seed, optimizer, four-node GH200 topology, and per-arm wall-clock budget;
+  codec, initialization seed, optimizer, four-node GH200 topology, and fixed optimizer-update
+  count;
 - the same amended, frozen splits and complete-round eligibility rule;
 - different training grouping only.
 
-Both trained models are evaluated on synchronized test groups. Evaluating the shuffled-trained arm
-on shuffled groups would change the estimand and is prohibited. During training,
+The `shuffled` code value means **cross-round grouped ten-POV training**: every POV retains its
+correct video-action pairing, while the ten members of a group are drawn from different rounds.
+It never means shuffled actions and must not be called a "shuffled-action WM" in reporting.
+
+Both trained models are evaluated on synchronized test groups. Evaluating the cross-round-trained
+arm on cross-round groups would change the estimand and is prohibited. During training,
 `dataset.validation_group_mode=synchronized` also forces both periodic validation and rollout
 metrics onto the same synchronized held-out task; only the training loader grouping differs. Run at
 least three training seeds; counterbalance arm order across seeds.
@@ -242,7 +247,13 @@ seeds. Thus the primary quality comparison is accompanied by direct conditioning
 ordinary and combat/death context rather than treating visual metrics alone as evidence that
 either model uses player actions. Both training arms persist the same deterministic validation
 rollout every 1,000 steps for private review, and every node records five-second GPU utilization,
-memory, temperature, and power telemetry for the full timed run.
+memory, temperature, and power telemetry for the full run.
+
+`CS1K_TRAIN_STEPS` is the primary compute/data match. It gives both arms exactly the same optimizer
+updates, raw POV frames, action streams, and model forward/backward operations. `CS1K_ARM_HOURS` is
+only a fail-closed safety cap: hitting it makes the run invalid rather than defining an endpoint.
+Wall-clock time and loader throughput are recorded as efficiency measurements, not treated as
+equal-compute evidence.
 
 ### Post-pilot action-routing amendment
 
@@ -297,7 +308,8 @@ Secondary endpoints:
 - PSNR, LPIPS, and SSIM;
 - codec reconstruction floor;
 - denoising latency and raw-POV latent throughput;
-- train/validation curves at equal wall time and matched processed frames.
+- train/validation curves at equal optimizer updates and exactly matched processed frames;
+- per-arm wall time and loader throughput as disclosed efficiency measurements.
 
 The metric backbone is public `dinov2_vitb14` for all arms. Test rollout seeds are fixed to 37, 38,
 and 39 for the pilot and 37 through 41 for the GH200 control. The GH200 evaluator derives the exact
@@ -350,7 +362,7 @@ checkpoint:
 - reserve frames `[8, 16)` only for one-second post-context event labels.
 
 Future pixels and future actions are never passed to the feature extractor. The primary
-model-level comparison gives the synchronized-trained and matched-information shuffled-trained
+model-level comparison gives the synchronized-trained and matched-information cross-round-trained
 checkpoints the exact same synchronized ten-POV contexts. Their features have the same dimension
 and use identical-capacity heads, optimizer settings, training labels, validation selection, probe
 seeds, and paired test windows. The checkpoints differ only in training grouping. The single-MIRA
@@ -375,8 +387,8 @@ not evidence that a trained world model learned synchronization.
   seeds measure sampler variation and are not independent training replicates.
 - Report failures and restarts. A run that fails before completing an optimizer step is a preflight
   failure, not a zero-valued result.
-- Do not claim a synchronization benefit from the pilot alone. The synchronized-vs-shuffled shared
-  architecture is the matched-information test.
+- Do not claim a synchronization benefit from the pilot alone. The synchronized-versus-cross-round
+  shared architecture is the matched-information test.
 - Do not generalize beyond Dust2, the two-second training window, one-second rollout, public
   DINOv2-based codec, or the tested compute range.
 
@@ -386,7 +398,7 @@ The training path uses MIRA's `CounterStrike1KIterable`, not
 `cs2_clean.datasets.CS2Dataset`. Both read the same materialized MP4/action payloads and use
 TorchCodec, but the classes do not implement the same experimental unit. The `cs2_clean` map-style
 loader enumerates overlapping per-POV windows; MIRA samples complete rounds, keeps all ten POVs
-contiguous and player-ordered, constructs the shuffled matched-information control, and performs
+contiguous and player-ordered, constructs the cross-round matched-information control, and performs
 the preregistered 32-to-8-fps action reduction. Substituting the class is therefore not a
 semantics-preserving loader optimization.
 
@@ -470,9 +482,10 @@ The GH200 evaluator ends by running its separate fail-closed auditor. It verifie
 with four distinct hostnames and rank identities, exactly one scheduler-visible GH200 per node,
 common clean commit, three or more node-local loader repeats bound to the confirmatory manifest,
 the common frozen loader selection, per-node telemetry, 640 global model-facing frames per
-optimizer step, equal wall-clock limits, spatial routing, fixed validation-rollout cadence, final
-checkpoint hashes, all 69 untouched test rounds (690 POV rows), five evaluation seeds, and complete
-midpoint and first-death four-mode action-intervention grids.
+optimizer step, identical fixed update counts and processed frames, absence of safety-cap
+termination, spatial routing, fixed validation-rollout cadence, exact final-step checkpoint hashes,
+all 69 untouched test rounds (690 POV rows), five evaluation seeds, and complete midpoint and
+first-death four-mode action-intervention grids.
 After at least three child audits pass, the sweep summarizer requires counterbalanced arm order and
 common code/data provenance, then aggregates each nested evaluation-seed mean across training
 seeds. The reported independent unit is therefore the training seed; diffusion evaluation seeds

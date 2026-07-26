@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# One-GPU engineering gate for the Dust2 synchronized-vs-shuffled control.
+# One-GPU engineering gate for the Dust2 synchronized-vs-cross-round control.
 #
 # This is deliberately not the publication endpoint. It verifies on an AWS RTX PRO 6000 that the
-# exact ten-player architecture, spatial action route, loader grouping intervention, timed training,
-# synchronized held-out evaluation, and action-ablation summary all execute before the preregistered
-# multi-seed GH200 experiment is submitted.
+# exact ten-player architecture, spatial action route, loader grouping intervention, fixed-step
+# training, synchronized held-out evaluation, and action-ablation summary all execute before the
+# preregistered multi-seed GH200 experiment is submitted.
 set -euo pipefail
 
 project_dir=${MIRA_PROJECT_DIR:-$PWD}
@@ -13,7 +13,8 @@ manifest_path=${CS1K_MANIFEST_PATH:?Set CS1K_MANIFEST_PATH}
 split_provenance=${CS1K_CONFIRMATORY_SPLIT_PROVENANCE:?Set CS1K_CONFIRMATORY_SPLIT_PROVENANCE}
 codec_checkpoint=${CS1K_CODEC_CHECKPOINT:?Set CS1K_CODEC_CHECKPOINT}
 output_root=${CS1K_OUTPUT_ROOT:?Set CS1K_OUTPUT_ROOT to a new directory}
-arm_hours=${CS1K_ARM_HOURS:-0.75}
+train_steps=${CS1K_TRAIN_STEPS:?Set the identical optimizer-update count for both arms}
+arm_hours=${CS1K_ARM_HOURS:-1.0}
 seed=${CS1K_SEED:-28}
 eval_seeds=${CS1K_EVAL_SEEDS:-37}
 action_modes=${CS1K_ACTION_MODES:-"true batch-shifted time-shifted zero"}
@@ -26,6 +27,10 @@ python_bin=${MIRA_PYTHON:-$project_dir/.pixi/envs/default/bin/python}
 
 if ! [[ "$seed" =~ ^[0-9]+$ ]]; then
   echo "CS1K_SEED must be a non-negative integer" >&2
+  exit 1
+fi
+if ! [[ "$train_steps" =~ ^[1-9][0-9]*$ ]]; then
+  echo "CS1K_TRAIN_STEPS must be a positive integer" >&2
   exit 1
 fi
 if (( seed % 2 == 0 )); then
@@ -131,6 +136,7 @@ printf '%s\n' \
   "scope=aws_engineering_preflight_not_publication_endpoint" \
   "code_commit=$code_commit" \
   "seed=$seed" \
+  "train_steps=$train_steps" \
   "arm_hours=$arm_hours" \
   "arm_order=$arm_order" \
   "eval_seeds=$eval_seeds" \
@@ -172,6 +178,8 @@ write_status() {
 
 for arm in "${arms[@]}"; do
   write_status "$arm" running
+  arm_started_epoch=$(date +%s)
+  arm_started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   "$python_bin" scripts/train_world_model.py \
     model=multi_wrapper_world_model_cs2_small \
     dataset=counterstrike1k_dust2 \
@@ -183,7 +191,7 @@ for arm in "${arms[@]}"; do
     model.architecture.config.action_routing=spatial \
     model.architecture.config.wm_config.codec_checkpoint="$codec_checkpoint" \
     run.seed="$seed" \
-    run.steps=100000000 \
+    run.steps="$train_steps" \
     run.batch_size=1 \
     run.deterministic=true \
     run.compile=false \
@@ -214,22 +222,76 @@ for arm in "${arms[@]}"; do
     world_model_metrics.per_device_batch_size=1 \
     world_model_metrics.num_viz_samples=2 \
     wandb.mode=disabled \
+    hydra.run.dir="$output_root/hydra/$arm" \
     2>&1 | tee "$output_root/$arm.log"
+  final_step=$((train_steps - 1))
+  final_checkpoint=$output_root/$arm/checkpoint-$final_step/checkpoint.pth
+  if [[ ! -s "$final_checkpoint" ]]; then
+    echo "Arm $arm did not reach the required $train_steps optimizer updates" >&2
+    exit 1
+  fi
+  if grep -q '"kind": "time_limit"' "$output_root/$arm/metrics.jsonl"; then
+    echo "Arm $arm hit the safety wall-clock cap before the fixed-step endpoint" >&2
+    exit 1
+  fi
+  arm_ended_epoch=$(date +%s)
+  arm_ended_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  "$python_bin" - \
+    "$output_root/$arm/training_termination.json.tmp" \
+    "$arm" \
+    "$train_steps" \
+    "$final_step" \
+    "$arm_started_utc" \
+    "$arm_ended_utc" \
+    "$((arm_ended_epoch - arm_started_epoch))" \
+    "$arm_hours" \
+    "$final_checkpoint" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+(
+    output,
+    arm,
+    train_steps,
+    final_step,
+    started_utc,
+    ended_utc,
+    elapsed_seconds,
+    max_duration_hours,
+    checkpoint,
+) = sys.argv[1:]
+payload = {
+    "schema": "mira-cs2-fixed-step-termination-v1",
+    "arm": arm,
+    "termination": "fixed_step_complete",
+    "optimizer_updates": int(train_steps),
+    "final_step": int(final_step),
+    "launcher_elapsed_wall_seconds": int(elapsed_seconds),
+    "max_duration_hours": float(max_duration_hours),
+    "started_utc": started_utc,
+    "ended_utc": ended_utc,
+    "checkpoint": str(Path(checkpoint).resolve()),
+}
+Path(output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  mv \
+    "$output_root/$arm/training_termination.json.tmp" \
+    "$output_root/$arm/training_termination.json"
   write_status "$arm" complete
 done
 
-latest_checkpoint() {
+fixed_step_checkpoint() {
   local arm=$1
-  find "$output_root/$arm" -path '*/checkpoint-*/checkpoint.pth' -print0 |
-    sort -zV | tail -z -n 1 | tr -d '\0'
+  printf '%s\n' "$output_root/$arm/checkpoint-$((train_steps - 1))/checkpoint.pth"
 }
 
 eval_root=$output_root/evaluation/synchronized_test_action_loss
 mkdir -p "$eval_root/provenance"
 for arm in shuffled synchronized; do
-  checkpoint=$(latest_checkpoint "$arm")
-  if [[ -z "$checkpoint" ]]; then
-    echo "No checkpoint found for $arm" >&2
+  checkpoint=$(fixed_step_checkpoint "$arm")
+  if [[ ! -s "$checkpoint" ]]; then
+    echo "Fixed-step checkpoint not found for $arm: $checkpoint" >&2
     exit 1
   fi
   printf '%s\n' "$checkpoint" >"$eval_root/provenance/${arm}_checkpoint.txt"
