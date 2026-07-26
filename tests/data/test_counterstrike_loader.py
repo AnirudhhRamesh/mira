@@ -38,6 +38,7 @@ def _fixture(root: Path) -> Path:
                     "map_slug": "dust2",
                     "frames": 32,
                     "frame0_tick": 100,
+                    "alive_end_frame": 32,
                     "fps": 32.0,
                 }
             )
@@ -93,6 +94,34 @@ def test_counterstrike_action_aggregation_and_video_subdir(tmp_path, monkeypatch
     assert metadata[0].sample_key.endswith("__p00")
     assert metadata[0].source_start_frame == 11
     assert metadata[0].frame_indices == [11, 15]
+    assert metadata[0].alive_end_frame == 32
+
+
+def test_midpoint_window_stays_inside_each_pov_alive_interval(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    root = _fixture(tmp_path)
+    manifest_path = root / "manifest_dust2.parquet"
+    table = pq.read_table(manifest_path)
+    rows = table.to_pylist()
+    rows[0]["alive_end_frame"] = 20
+    pq.write_table(pa.Table.from_pylist(rows), manifest_path)
+    monkeypatch.setattr(
+        "mira.data.counterstrike.decode_frames",
+        lambda _path, indices, frame_size: torch.zeros(
+            len(indices),
+            3,
+            *frame_size,
+            dtype=torch.uint8,
+        ),
+    )
+
+    _batch, metadata = next(iter(_loader(root, mode="single", n_players=1)))
+
+    assert metadata[0].sample_key.endswith("__p00")
+    assert metadata[0].source_start_frame == 5
+    assert max(metadata[0].frame_indices) < metadata[0].alive_end_frame
 
 
 def test_counterstrike_actions_start_one_row_after_observation(

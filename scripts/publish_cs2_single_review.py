@@ -94,6 +94,12 @@ def safe_files(run_root: Path) -> list[tuple[Path, str]]:
             PurePosixPath("action-conditioning"),
         )
     )
+    files.extend(
+        _safe_tree(
+            run_root / "evaluation" / "generated_action_adherence",
+            PurePosixPath("generated-action-adherence"),
+        )
+    )
     return files
 
 
@@ -264,6 +270,36 @@ def build_traces(
                     "metrics_url": urls.get(uploaded.get(summary_relative, "")),
                 }
             )
+    generated_root = run_root / "evaluation" / "generated_action_adherence" / "midpoint"
+    review_manifest_path = generated_root / "review_manifest.json"
+    if review_manifest_path.is_file():
+        review_manifest = json.loads(review_manifest_path.read_text(encoding="utf-8"))
+        videos = []
+        for item in review_manifest:
+            relative = str(PurePosixPath("generated-action-adherence/midpoint") / item["path"])
+            key = uploaded.get(relative)
+            if key:
+                videos.append(
+                    {
+                        "label": item["sample_key"],
+                        "url": urls[key],
+                    }
+                )
+        summary_relative = "generated-action-adherence/midpoint/summary.json"
+        traces.append(
+            {
+                "id": "single-generated-action-adherence-midpoint",
+                "arm": "single",
+                "kind": "generated_action_adherence",
+                "label": "Generated midpoint action counterfactuals",
+                "step": 15_000,
+                "seed": 37,
+                "status": "ready",
+                "message": "Ground truth, true, cross-round shuffled, and zero-action columns.",
+                "videos": videos,
+                "metrics_url": urls.get(uploaded.get(summary_relative, "")),
+            }
+        )
     return traces
 
 

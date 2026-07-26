@@ -23,6 +23,11 @@ the untouched matched-information endpoint.
   interval-reduced action rows `t+1` through `t+4`: buttons are OR-reduced and
   `(delta_yaw, delta_pitch)` is summed. No extra normalization is applied before MIRA's unchanged
   native action encoder.
+- Ordinary random training and deterministic midpoint validation windows end strictly before each
+  POV's released `alive_end_frame`, because the post-death spectator camera is not controlled by
+  that player's action stream. Synchronized/shuffled groups apply the same constraint to every
+  contributing POV. The preregistered first-death stress window remains event-centered and must
+  carry an alive-target mask for generated-motion metrics.
 
 The canonical selection digest, full-manifest digest, source shard list, payload counts, split
 statistics, and leakage check are written beside every run. Already materialized payloads may be
@@ -74,6 +79,12 @@ failure/repair, respectively, but neither is relabeled as the corrected 690-POV 
 single-POV baseline, all future confirmatory shared models, and every paper-facing action
 evaluation use the corrected adapter. This correction was committed before any new confirmatory
 model was trained or evaluated.
+
+The same pre-training audit found that the earlier adapter sampled ordinary windows from the full
+rendered round rather than the player-controlled alive interval. The public adapter now binds
+`alive_end_frame` from the frozen manifest into every sample and restricts all random/midpoint
+plans to it. This is a CS2 data-validity correction: the MIRA model, codec, loss, action encoder,
+and normalizations are unchanged.
 
 ### Fresh single-MIRA endpoint (frozen 2026-07-25 UTC)
 

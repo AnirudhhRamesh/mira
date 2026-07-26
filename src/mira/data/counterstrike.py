@@ -77,6 +77,7 @@ class _ManifestRow:
     pov_idx: int
     frames: int
     frame0_tick: int
+    alive_end_frame: int
 
 
 @dataclass
@@ -92,6 +93,7 @@ class CounterStrikeClipMeta:
     round_id: str
     sample_key: str
     source_start_frame: int
+    alive_end_frame: int
     group_mode: str
     window_mode: str
 
@@ -145,6 +147,7 @@ def _read_rounds(
             "map_slug",
             "frames",
             "frame0_tick",
+            "alive_end_frame",
             "fps",
         ],
     )
@@ -173,6 +176,7 @@ def _read_rounds(
             pov_idx=int(raw["pov_idx"]),
             frames=int(raw["frames"]),
             frame0_tick=int(raw["frame0_tick"]),
+            alive_end_frame=int(raw["alive_end_frame"]),
         )
         by_round.setdefault(row.round_id, []).append(row)
 
@@ -258,7 +262,16 @@ class CounterStrike1KIterable(IterableDataset):
         self.shuffle_buffer_size = shuffle_buffer_size
         self.seed = seed
 
-        longest_common = max(min(row.frames for row in rows) for rows in self.rounds)
+        if self.group_mode == "single" and self.window_mode == "midpoint":
+            longest_common = max(min(row.frames, row.alive_end_frame) for rows in self.rounds for row in rows)
+        else:
+            longest_common = max(
+                min(
+                    (row.frames if self.window_mode != "midpoint" else min(row.frames, row.alive_end_frame))
+                    for row in rows
+                )
+                for rows in self.rounds
+            )
         required_with_action_target = self.required_source_frames + CS2_ACTION_TARGET_OFFSET
         if required_with_action_target > longest_common:
             raise ValueError(
@@ -311,10 +324,10 @@ class CounterStrike1KIterable(IterableDataset):
     ) -> Iterator[list[tuple[_ManifestRow, int]]]:
         rows = self.rounds[round_idx]
         if self.group_mode == "single":
-            common_frames = min(row.frames for row in rows)
-            if common_frames < self.required_source_frames + CS2_ACTION_TARGET_OFFSET:
-                return
             if self.window_mode != "midpoint":
+                common_frames = min(row.frames for row in rows)
+                if common_frames < self.required_source_frames + CS2_ACTION_TARGET_OFFSET:
+                    return
                 start = self._event_start(rows, common_frames)
                 if start is None:
                     return
@@ -322,11 +335,17 @@ class CounterStrike1KIterable(IterableDataset):
                     yield [(row, start)]
                 return
             for row in rows:
-                yield [(row, self._start(common_frames, rng))]
+                alive_frames = min(row.frames, row.alive_end_frame)
+                if alive_frames < self.required_source_frames + CS2_ACTION_TARGET_OFFSET:
+                    continue
+                yield [(row, self._start(alive_frames, rng))]
             return
 
         if self.group_mode == "synchronized":
-            common_frames = min(row.frames for row in rows)
+            common_frames = min(
+                (row.frames if self.window_mode != "midpoint" else min(row.frames, row.alive_end_frame))
+                for row in rows
+            )
             if common_frames < self.required_source_frames + CS2_ACTION_TARGET_OFFSET:
                 return
             shared_start = (
@@ -347,9 +366,10 @@ class CounterStrike1KIterable(IterableDataset):
         for pov_idx in range(self.n_players):
             source_round_idx = control_order[(round_idx + pov_idx) % len(self.rounds)]
             row = self.rounds[source_round_idx][pov_idx]
-            if row.frames < self.required_source_frames + CS2_ACTION_TARGET_OFFSET:
+            alive_frames = min(row.frames, row.alive_end_frame)
+            if alive_frames < self.required_source_frames + CS2_ACTION_TARGET_OFFSET:
                 return
-            plans.append((row, self._start(row.frames, rng)))
+            plans.append((row, self._start(alive_frames, rng)))
         yield plans
 
     def _decode_sample(
@@ -413,6 +433,7 @@ class CounterStrike1KIterable(IterableDataset):
                 round_id=row.round_id,
                 sample_key=row.sample_key,
                 source_start_frame=start,
+                alive_end_frame=row.alive_end_frame,
                 group_mode=self.group_mode,
                 window_mode=self.window_mode,
             ),
