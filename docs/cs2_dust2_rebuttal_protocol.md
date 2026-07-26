@@ -374,6 +374,12 @@ training split only. Report per-target AP/AUROC, macro AP/AUROC, prevalence, exc
 targets, and synchronized-minus-shuffled paired match-cluster bootstrap intervals. The independent
 model-level unit remains the world-model training seed; repeated probe initializations quantify
 head-fitting sensitivity and must not be reported as world-model replications.
+Run `scripts/run_cs2_frozen_event_probe.sh` once inside each audited `seed_*` directory with output
+at `seed_*/event_probe`, then run `scripts/summarize_cs2_event_probe_sweep.py` on the sweep root.
+The sweep aggregator verifies each synchronized/cross-round checkpoint hash against its child
+training audit, averages the three probe-head initializations within a world-model seed, and only
+then estimates mean, sample standard deviation, and a training-seed bootstrap interval across at
+least three independently trained model pairs.
 
 A separate `input-grouping` DINO probe compares synchronized ten-POV input with an equal-volume
 cross-match shuffled input before MIRA training. It is an auxiliary information-content control,
@@ -460,6 +466,7 @@ or copying from a live training volume.
 - GH200 held-out evaluation: `scripts/run_cs2_gh200_sync_control_eval.sh`
 - Frozen MIRA context features: `scripts/extract_cs2_future_event_features.py`
 - Causal frozen-checkpoint event probe: `scripts/run_cs2_frozen_event_probe.sh`
+- Causal event-probe training-seed aggregate: `scripts/summarize_cs2_event_probe_sweep.py`
 - GH200 completed-run audit: `scripts/audit_cs2_gh200_sync_control.py`
 - GH200 training-seed aggregate: `scripts/summarize_cs2_gh200_sweep.py`
 - Completed pilot audit: `scripts/audit_cs2_rebuttal_run.py`
