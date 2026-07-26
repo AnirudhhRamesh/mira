@@ -1,4 +1,4 @@
-# ~30M-class preliminary model. Single/shared runs use these identical inner dimensions.
+# 44.83M-parameter preliminary single model. Single/shared runs use identical inner dimensions.
 hidden_dim: 512
 n_head: 8
 n_kv_head: 4
