@@ -31,9 +31,15 @@ Hydra applications for training, evaluation, and serving. Each reads its config 
   independent world-model training seeds.
 - `submit_cs2_gh200_sweep.sh` — from a Slurm login node, submit the complete three-seed
   four-node-GH200 training, causal-event, and final aggregation dependency graph with one command.
-  Copy `clariden_sync_sweep.env.example` outside the checkout, fill the shared paths and Slurm
-  account/partition, then run
-  `bash scripts/submit_cs2_gh200_sweep.sh /path/to/clariden_sync_sweep.env`.
+  This lower-level submitter assumes its runtime has already been prepared.
+- `prepare_and_submit_cs2_clariden_sweep.sh` — preferred Clariden entry point. It layers the
+  required packages over CSCS's pinned ARM64 `pytorch/v2.8.0:v1` uenv and then invokes the complete
+  dependency submitter. Copy `clariden_sync_sweep.env.example` outside the checkout, fill the
+  shared paths and Slurm account, then run
+  `bash scripts/prepare_and_submit_cs2_clariden_sweep.sh /path/to/clariden_sync_sweep.env`.
+- `setup_cs2_clariden_uenv.sh` — idempotent environment preparation invoked by the preferred
+  wrapper. It verifies ARM64 and PyTorch 2.8, pins TorchCodec 0.7, installs both clean public
+  checkouts into one uenv-layered venv, and records the exact package/runtime provenance.
 - `run_cs2_frozen_event_probe_slurm_seed.sh` — dependent one-GPU event job for one passing
   fixed-update child audit, with explicit common-step checkpoints and frozen single-MIRA hash.
 - `run_cs2_gh200_sweep_finalize.sh` — dependent fail-closed aggregation job; writes

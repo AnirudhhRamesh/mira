@@ -25,6 +25,7 @@ fi
 
 project_dir=${MIRA_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 python_bin=${MIRA_PYTHON:-$project_dir/.pixi/envs/default/bin/python}
+submit_python=${CS1K_SUBMIT_PYTHON:-python3}
 release_dir=${CS1K_RELEASE_DIR:?Set the pinned CounterStrike-1K checkout}
 release_python=${CS1K_RELEASE_PYTHON:?Set the CounterStrike-1K Python}
 dataset_dir=${CS1K_DATASET_DIR:?Set the materialized Dust2 dataset root}
@@ -44,7 +45,7 @@ training_seed_text=${CS1K_TRAINING_SEEDS:-"28 29 30"}
 expected_manifest_sha256=33abbb623072932431871a612620110c473d4b664c52010e5763c273c6daf10e
 expected_single_sha256=${CS1K_EXPECTED_SINGLE_CHECKPOINT_SHA256:-3dbd8f0e43dbe833a5f36370d75f6306c7aa036dfcd3edba767ab138232fa047}
 
-for command_name in git sbatch sha256sum; do
+for command_name in git sbatch sha256sum "$submit_python"; do
   if ! command -v "$command_name" >/dev/null; then
     echo "Required command not found: $command_name" >&2
     exit 1
@@ -57,8 +58,6 @@ for directory in "$project_dir" "$release_dir" "$dataset_dir"; do
   fi
 done
 for path in \
-  "$python_bin" \
-  "$release_python" \
   "$manifest_path" \
   "$split_provenance" \
   "$codec_checkpoint" \
@@ -68,10 +67,14 @@ for path in \
     exit 1
   fi
 done
-if [[ ! -x "$python_bin" || ! -x "$release_python" ]]; then
-  echo "Both configured Python interpreters must be executable" >&2
-  exit 1
-fi
+# A uenv-layered venv may point into /user-environment and therefore appear as a broken symlink on
+# the login node. The interpreters are executed only after Slurm mounts the pinned uenv.
+for path in "$python_bin" "$release_python"; do
+  if [[ ! -x "$path" && ! -L "$path" ]]; then
+    echo "Configured runtime Python is absent: $path" >&2
+    exit 1
+  fi
+done
 if [[ -n "$(git -C "$project_dir" status --porcelain=v1)" ]]; then
   echo "MIRA checkout must be clean before submission" >&2
   exit 1
@@ -200,7 +203,7 @@ raw_finalize_job_id=$(sbatch \
 finalize_job_id=$(parse_job_id "$raw_finalize_job_id")
 
 submission_manifest=$output_root/submission_manifest.json
-"$python_bin" - \
+"$submit_python" - \
   "$submission_manifest" \
   "$account" \
   "$partition" \

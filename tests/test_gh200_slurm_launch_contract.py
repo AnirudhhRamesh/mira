@@ -21,6 +21,8 @@ def test_gh200_shell_entrypoints_parse() -> None:
         ROOT / "scripts" / "run_cs2_frozen_event_probe_slurm_seed.sh",
         ROOT / "scripts" / "run_cs2_gh200_sweep_finalize.sh",
         ROOT / "scripts" / "submit_cs2_gh200_sweep.sh",
+        ROOT / "scripts" / "setup_cs2_clariden_uenv.sh",
+        ROOT / "scripts" / "prepare_and_submit_cs2_clariden_sweep.sh",
     ]
     subprocess.run(["bash", "-n", *map(str, scripts)], check=True)
 
@@ -116,6 +118,29 @@ def test_submitted_jobs_pin_source_commits_until_execution() -> None:
     assert "CS1K_EXPECTED_RELEASE_COMMIT" in event
     assert "CS1K_EXPECTED_MIRA_COMMIT=$(git" in submit
     assert "CS1K_EXPECTED_RELEASE_COMMIT=$(git" in submit
+
+
+def test_clariden_wrapper_uses_pinned_arm64_pytorch_uenv() -> None:
+    setup = (ROOT / "scripts" / "setup_cs2_clariden_uenv.sh").read_text()
+    prepare = (ROOT / "scripts" / "prepare_and_submit_cs2_clariden_sweep.sh").read_text()
+    config = (ROOT / "scripts" / "clariden_sync_sweep.env.example").read_text()
+    for text in (setup, prepare, config):
+        assert "pytorch/v2.8.0:v1" in text
+    assert "torchcodec==0.7.0" in setup
+    assert "22dad05a3f2fd6c242a56e55e1eb2af61ed42385" in setup
+    assert "--system-site-packages" in setup
+    assert "platform.machine()" in setup
+    assert "uenv run --view=default" in prepare
+    assert "--uenv=$uenv_label:/user-environment --view=default" in prepare
+    assert "set -a\nsource" in prepare
+    assert 'CS1K_GH200_PARTITION="normal"' in config
+
+
+def test_login_node_submitter_does_not_execute_uenv_python() -> None:
+    text = (ROOT / "scripts" / "submit_cs2_gh200_sweep.sh").read_text()
+    assert "CS1K_SUBMIT_PYTHON" in text
+    assert '"$submit_python" - \\' in text
+    assert '[[ ! -x "$path" && ! -L "$path" ]]' in text
 
 
 def _initialize_clean_repo(path: Path) -> None:
