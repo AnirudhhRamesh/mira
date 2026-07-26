@@ -21,6 +21,8 @@ feature_seed=${CS1K_EVENT_FEATURE_SEED:-37}
 probe_seeds=${CS1K_EVENT_PROBE_SEEDS:-"17 29 43"}
 bootstrap_samples=${CS1K_EVENT_BOOTSTRAP_SAMPLES:-10000}
 max_windows_per_split=${CS1K_EVENT_MAX_WINDOWS_PER_SPLIT:-}
+expected_mira_commit=${CS1K_EXPECTED_MIRA_COMMIT:-}
+expected_release_commit=${CS1K_EXPECTED_RELEASE_COMMIT:-}
 
 cd "$mira_dir"
 export PYTHONDONTWRITEBYTECODE=1
@@ -33,6 +35,16 @@ for repo in "$mira_dir" "$release_dir"; do
     exit 1
   fi
 done
+if [[ -n "$expected_mira_commit" ]] &&
+  [[ "$(git -C "$mira_dir" rev-parse HEAD)" != "$expected_mira_commit" ]]; then
+  echo "MIRA commit drifted after sweep submission" >&2
+  exit 1
+fi
+if [[ -n "$expected_release_commit" ]] &&
+  [[ "$(git -C "$release_dir" rev-parse HEAD)" != "$expected_release_commit" ]]; then
+  echo "CounterStrike-1K commit drifted after sweep submission" >&2
+  exit 1
+fi
 for path in "$manifest_path" "$single_checkpoint"; do
   if [[ ! -f "$path" ]]; then
     echo "Required event-probe input is absent: $path" >&2

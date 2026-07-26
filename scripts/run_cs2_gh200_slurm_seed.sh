@@ -25,6 +25,7 @@ prefetch_factor=${CS1K_DATALOADER_PREFETCH_FACTOR:-2}
 persistent_workers=${CS1K_DATALOADER_PERSISTENT_WORKERS:-true}
 pin_memory=${CS1K_DATALOADER_PIN_MEMORY:-true}
 expected_manifest_sha256=33abbb623072932431871a612620110c473d4b664c52010e5763c273c6daf10e
+expected_mira_commit=${CS1K_EXPECTED_MIRA_COMMIT:-}
 
 : "${SLURM_JOB_ID:?Run through sbatch or inside a four-node Slurm allocation}"
 : "${SLURM_JOB_NODELIST:?SLURM_JOB_NODELIST is required}"
@@ -53,6 +54,11 @@ export PYTHONPATH="$project_dir/src${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONDONTWRITEBYTECODE=1
 if [[ -n "$(git status --porcelain=v1)" ]]; then
   echo "GH200 publication runs require a clean source tree" >&2
+  exit 1
+fi
+if [[ -n "$expected_mira_commit" ]] &&
+  [[ "$(git rev-parse HEAD)" != "$expected_mira_commit" ]]; then
+  echo "MIRA commit drifted after sweep submission" >&2
   exit 1
 fi
 for path in "$manifest_path" "$split_provenance" "$codec_checkpoint"; do

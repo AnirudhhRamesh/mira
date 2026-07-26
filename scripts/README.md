@@ -29,6 +29,15 @@ Hydra applications for training, evaluation, and serving. Each reads its config 
 - `summarize_cs2_event_probe_sweep.py` — verify every event checkpoint against its passing GH200
   audit, average repeated probe-head fits within each frozen model pair, and aggregate only across
   independent world-model training seeds.
+- `submit_cs2_gh200_sweep.sh` — from a Slurm login node, submit the complete three-seed
+  four-node-GH200 training, causal-event, and final aggregation dependency graph with one command.
+  Copy `clariden_sync_sweep.env.example` outside the checkout, fill the shared paths and Slurm
+  account/partition, then run
+  `bash scripts/submit_cs2_gh200_sweep.sh /path/to/clariden_sync_sweep.env`.
+- `run_cs2_frozen_event_probe_slurm_seed.sh` — dependent one-GPU event job for one passing
+  fixed-update child audit, with explicit common-step checkpoints and frozen single-MIRA hash.
+- `run_cs2_gh200_sweep_finalize.sh` — dependent fail-closed aggregation job; writes
+  `sweep_summary.json` and `event_probe_sweep_summary.json` only after all child jobs pass.
 - `render_cs2_rebuttal_report.py` — render deterministic Markdown tables only after the complete
   Dust2 run audit passes and all summaries match the audited checkpoint and seed contracts.
 - `validate_cs2_loader_selection.py` — freeze a GH200 loader configuration only from at least three

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +18,9 @@ def test_gh200_shell_entrypoints_parse() -> None:
         ROOT / "scripts" / "run_cs2_gh200_sync_control.sh",
         ROOT / "scripts" / "run_cs2_gh200_sync_control_eval.sh",
         ROOT / "scripts" / "run_cs2_g7e_sync_control_preflight.sh",
+        ROOT / "scripts" / "run_cs2_frozen_event_probe_slurm_seed.sh",
+        ROOT / "scripts" / "run_cs2_gh200_sweep_finalize.sh",
+        ROOT / "scripts" / "submit_cs2_gh200_sweep.sh",
     ]
     subprocess.run(["bash", "-n", *map(str, scripts)], check=True)
 
@@ -80,3 +85,156 @@ def test_g7e_preflight_uses_the_same_fixed_step_endpoint_contract() -> None:
     assert "run.steps=100000000" not in text
     assert "checkpoint-$((train_steps - 1))/checkpoint.pth" in text
     assert 'hydra.run.dir="$output_root/hydra/$arm"' in text
+
+
+def test_complete_sweep_submitter_builds_fail_closed_dependency_dag() -> None:
+    text = (ROOT / "scripts" / "submit_cs2_gh200_sweep.sh").read_text()
+    assert 'CS1K_TRAINING_SEEDS:-"28 29 30"' in text
+    assert '--nodes=4' in text
+    assert '--dependency="afterok:$training_job_id"' in text
+    assert '--dependency="afterok:$event_dependency"' in text
+    assert "run_cs2_frozen_event_probe_slurm_seed.sh" in text
+    assert "run_cs2_gh200_sweep_finalize.sh" in text
+    assert "submission_manifest.json" in text
+
+
+def test_dependent_event_job_uses_exact_fixed_step_checkpoints() -> None:
+    text = (ROOT / "scripts" / "run_cs2_frozen_event_probe_slurm_seed.sh").read_text()
+    assert "checkpoint_index=$((train_steps - 1))" in text
+    assert "synchronized/checkpoint-$checkpoint_index/checkpoint.pth" in text
+    assert "shuffled/checkpoint-$checkpoint_index/checkpoint.pth" in text
+    assert "mira-cs2-gh200-sync-control-audit-v2" in text
+    assert "CS1K_EXPECTED_SINGLE_CHECKPOINT_SHA256" in text
+
+
+def test_submitted_jobs_pin_source_commits_until_execution() -> None:
+    training = (ROOT / "scripts" / "run_cs2_gh200_slurm_seed.sh").read_text()
+    event = (ROOT / "scripts" / "run_cs2_frozen_event_probe.sh").read_text()
+    submit = (ROOT / "scripts" / "submit_cs2_gh200_sweep.sh").read_text()
+    assert "CS1K_EXPECTED_MIRA_COMMIT" in training
+    assert "CS1K_EXPECTED_MIRA_COMMIT" in event
+    assert "CS1K_EXPECTED_RELEASE_COMMIT" in event
+    assert "CS1K_EXPECTED_MIRA_COMMIT=$(git" in submit
+    assert "CS1K_EXPECTED_RELEASE_COMMIT=$(git" in submit
+
+
+def _initialize_clean_repo(path: Path) -> None:
+    path.mkdir()
+    (path / "tracked.txt").write_text("frozen\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    subprocess.run(["git", "add", "tracked.txt"], cwd=path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "frozen",
+        ],
+        cwd=path,
+        check=True,
+    )
+
+
+def test_complete_sweep_submitter_submits_three_seed_dependency_dag(tmp_path: Path) -> None:
+    project = tmp_path / "mira"
+    release = tmp_path / "release"
+    dataset = tmp_path / "dataset"
+    fake_bin = tmp_path / "bin"
+    _initialize_clean_repo(project)
+    _initialize_clean_repo(release)
+    dataset.mkdir()
+    fake_bin.mkdir()
+
+    manifest = dataset / "manifest.parquet"
+    provenance = dataset / "provenance.json"
+    codec = tmp_path / "codec.pth"
+    single = tmp_path / "single.pth"
+    for path in (manifest, provenance, codec, single):
+        path.write_bytes(b"fixture")
+
+    sbatch_log = tmp_path / "sbatch.log"
+    sbatch_counter = tmp_path / "sbatch.counter"
+    fake_sbatch = fake_bin / "sbatch"
+    fake_sbatch.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+counter=${FAKE_SBATCH_COUNTER:?}
+log=${FAKE_SBATCH_LOG:?}
+if [[ -f "$counter" ]]; then
+  value=$(<"$counter")
+else
+  value=1000
+fi
+value=$((value + 1))
+printf '%s\n' "$value" >"$counter"
+printf '%s\n' "$*" >>"$log"
+printf '%s\n' "$value"
+""",
+        encoding="utf-8",
+    )
+    fake_sbatch.chmod(0o755)
+    fake_sha256sum = fake_bin / "sha256sum"
+    fake_sha256sum.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  *manifest.parquet) digest=33abbb623072932431871a612620110c473d4b664c52010e5763c273c6daf10e ;;
+  *single.pth) digest=3dbd8f0e43dbe833a5f36370d75f6306c7aa036dfcd3edba767ab138232fa047 ;;
+  *) exit 2 ;;
+esac
+printf '%s  %s\n' "$digest" "$1"
+""",
+        encoding="utf-8",
+    )
+    fake_sha256sum.chmod(0o755)
+
+    output_root = tmp_path / "output"
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_SBATCH_COUNTER": str(sbatch_counter),
+        "FAKE_SBATCH_LOG": str(sbatch_log),
+        "MIRA_PROJECT_DIR": str(project),
+        "MIRA_PYTHON": sys.executable,
+        "CS1K_RELEASE_DIR": str(release),
+        "CS1K_RELEASE_PYTHON": sys.executable,
+        "CS1K_DATASET_DIR": str(dataset),
+        "CS1K_MANIFEST_PATH": str(manifest),
+        "CS1K_CONFIRMATORY_SPLIT_PROVENANCE": str(provenance),
+        "CS1K_CODEC_CHECKPOINT": str(codec),
+        "CS1K_SINGLE_CHECKPOINT": str(single),
+        "CS1K_OUTPUT_ROOT": str(output_root),
+        "CS1K_TRAIN_STEPS": "10000",
+        "CS1K_ARM_HOURS": "4",
+        "CS1K_SLURM_ACCOUNT": "test-account",
+        "CS1K_GH200_PARTITION": "test-gh200",
+    }
+    subprocess.run(
+        ["bash", str(ROOT / "scripts" / "submit_cs2_gh200_sweep.sh")],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    calls = sbatch_log.read_text(encoding="utf-8").splitlines()
+    assert len(calls) == 7
+    assert [f"CS1K_SEED={seed}" in calls[index] for index, seed in enumerate((28, 29, 30))] == [
+        True,
+        True,
+        True,
+    ]
+    assert "afterok:1001" in calls[3]
+    assert "afterok:1002" in calls[4]
+    assert "afterok:1003" in calls[5]
+    assert "afterok:1004:1005:1006" in calls[6]
+
+    submission = json.loads((output_root / "submission_manifest.json").read_text(encoding="utf-8"))
+    assert submission["schema"] == "mira-cs2-clariden-submission-v1"
+    assert submission["contract"]["training_seeds"] == [28, 29, 30]
+    assert submission["slurm"]["finalize_job"] == "1007"
