@@ -174,6 +174,15 @@ arrays, RAFT rows, temporal-probe checkpoint and feature archives, action-recove
 and recovery provenance. The completed audit status is `pass`; its report SHA-256 is
 `4722361e89c9c5e83d1f60f2dbe78a663a49e3fb44152105ae42b047ec6dc0ae`.
 
+```bash
+python scripts/audit_cs2_single_confirmatory_endpoint.py \
+  --run-root /runs/20260726_dust2_single_confirmatory_15k_v1 \
+  --manifest /data/cs1k-360p/manifest_dust2_confirmatory_spatial_v1.parquet \
+  --probe-summary /runs/temporal-arr-cs1k-dust2-v1/probe/summary.json \
+  --probe-checkpoint /runs/temporal-arr-cs1k-dust2-v1/probe/temporal_action_probe.pt \
+  --output /runs/20260726_dust2_single_confirmatory_15k_v1/post_test_integrity_audit.json
+```
+
 ## Pilot question: single versus shared MIRA
 
 Question: under an equal GPU wall-clock budget, does a ten-POV shared MIRA baseline trained on
