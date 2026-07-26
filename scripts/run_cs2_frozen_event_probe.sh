@@ -15,6 +15,8 @@ control_root=${CS1K_CONTROL_ROOT:?Set the synchronized-vs-shuffled training root
 output_root=${CS1K_EVENT_OUTPUT_ROOT:?Set a new event-probe output root}
 mira_python=${MIRA_PYTHON:-$mira_dir/.pixi/envs/default/bin/python}
 release_python=${CS1K_RELEASE_PYTHON:-$release_dir/.venv/bin/python}
+explicit_synchronized_checkpoint=${CS1K_SYNCHRONIZED_CHECKPOINT:-}
+explicit_shuffled_checkpoint=${CS1K_SHUFFLED_CHECKPOINT:-}
 feature_seed=${CS1K_EVENT_FEATURE_SEED:-37}
 probe_seeds=${CS1K_EVENT_PROBE_SEEDS:-"17 29 43"}
 bootstrap_samples=${CS1K_EVENT_BOOTSTRAP_SAMPLES:-10000}
@@ -51,12 +53,28 @@ latest_checkpoint() {
   find "$control_root/$arm" -path '*/checkpoint-*/checkpoint.pth' -print0 |
     sort -zV | tail -z -n 1 | tr -d '\0'
 }
-shuffled_checkpoint=$(latest_checkpoint shuffled)
-synchronized_checkpoint=$(latest_checkpoint synchronized)
+if { [[ -n "$explicit_synchronized_checkpoint" ]] && [[ -z "$explicit_shuffled_checkpoint" ]]; } ||
+  { [[ -z "$explicit_synchronized_checkpoint" ]] && [[ -n "$explicit_shuffled_checkpoint" ]]; }; then
+  echo "Set both CS1K_SYNCHRONIZED_CHECKPOINT and CS1K_SHUFFLED_CHECKPOINT, or neither" >&2
+  exit 1
+fi
+if [[ -n "$explicit_synchronized_checkpoint" ]]; then
+  synchronized_checkpoint=$(realpath "$explicit_synchronized_checkpoint")
+  shuffled_checkpoint=$(realpath "$explicit_shuffled_checkpoint")
+else
+  shuffled_checkpoint=$(latest_checkpoint shuffled)
+  synchronized_checkpoint=$(latest_checkpoint synchronized)
+fi
 if [[ -z "$shuffled_checkpoint" || -z "$synchronized_checkpoint" ]]; then
   echo "Frozen shuffled and synchronized checkpoints are required under $control_root" >&2
   exit 1
 fi
+for checkpoint in "$synchronized_checkpoint" "$shuffled_checkpoint"; do
+  if [[ ! -f "$checkpoint" ]]; then
+    echo "Frozen control checkpoint not found: $checkpoint" >&2
+    exit 1
+  fi
+done
 
 mkdir -p "$output_root/provenance"
 status_file=$output_root/status.tsv

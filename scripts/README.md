@@ -23,7 +23,9 @@ Hydra applications for training, evaluation, and serving. Each reads its config 
   frozen checkpoint's last causal context representation without editing the MIRA architecture.
 - `run_cs2_frozen_event_probe.sh` — compare identical synchronized contexts represented by the
   single, synchronized-trained, and matched-information shuffled-trained checkpoints using the
-  public CounterStrike-1K future-event probe.
+  public CounterStrike-1K future-event probe. Set both `CS1K_SYNCHRONIZED_CHECKPOINT` and
+  `CS1K_SHUFFLED_CHECKPOINT` for an exact common-step comparison; otherwise the launcher uses each
+  arm's latest checkpoint.
 - `render_cs2_rebuttal_report.py` — render deterministic Markdown tables only after the complete
   Dust2 run audit passes and all summaries match the audited checkpoint and seed contracts.
 - `validate_cs2_loader_selection.py` — freeze a GH200 loader configuration only from at least three
