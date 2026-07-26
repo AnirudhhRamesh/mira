@@ -401,7 +401,10 @@ def parse_args() -> argparse.Namespace:
         "--group-mode",
         choices=["single", "synchronized", "shuffled"],
         default=None,
-        help="Override eval grouping (e.g. evaluate a shuffled-trained model on synchronized POVs).",
+        help=(
+            "Override eval grouping (e.g. evaluate a cross-round-grouped model on "
+            "synchronized POVs; 'shuffled' is the backward-compatible internal key)."
+        ),
     )
     parser.add_argument(
         "--window-mode",

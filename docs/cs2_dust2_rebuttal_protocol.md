@@ -351,7 +351,7 @@ routing diagnostic must remain visibly separated from them.
 
 The model-level synchronization endpoint uses an external probe rather than adding a task head to
 MIRA. This preserves the baseline architecture and separates representation quality from
-world-model training. For each frozen single, synchronized-trained, and shuffled-trained
+world-model training. For each frozen single, synchronized-trained, and cross-round-grouped
 checkpoint:
 
 - load the identical deterministic midpoint clip from every complete train, validation, and
