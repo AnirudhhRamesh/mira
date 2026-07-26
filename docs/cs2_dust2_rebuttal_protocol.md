@@ -324,6 +324,38 @@ that all 69 rounds contain an in-range `player_death`; it did not read video or 
 These are preregistered secondary endpoints. The validation-only G7e gate and post-hoc pilot
 routing diagnostic must remain visibly separated from them.
 
+## Causal future-event representation probe
+
+The model-level synchronization endpoint uses an external probe rather than adding a task head to
+MIRA. This preserves the baseline architecture and separates representation quality from
+world-model training. For each frozen single, synchronized-trained, and shuffled-trained
+checkpoint:
+
+- load the identical deterministic midpoint clip from every complete train, validation, and
+  confirmatory-test round;
+- pass only frames/actions `[0, 8)` at 8 fps to MIRA;
+- observe the final diffusion-transformer block with a forward hook at clean flow time `tau=1`;
+- spatially pool the last causal context latent to one vector per POV;
+- reserve frames `[8, 16)` only for one-second post-context event labels.
+
+Future pixels and future actions are never passed to the feature extractor. The primary
+model-level comparison gives the synchronized-trained and matched-information shuffled-trained
+checkpoints the exact same synchronized ten-POV contexts. Their features have the same dimension
+and use identical-capacity heads, optimizer settings, training labels, validation selection, probe
+seeds, and paired test windows. The checkpoints differ only in training grouping. The single-MIRA
+arm uses one deterministic anchor POV and remains contextual.
+
+The targets are FIRE, RELOAD, damage, weapon switch, player death, item equip, zoom, blind, bomb
+plant, defuse, and explosion in the post-context interval. Target support is selected from the
+training split only. Report per-target AP/AUROC, macro AP/AUROC, prevalence, excluded low-support
+targets, and synchronized-minus-shuffled paired match-cluster bootstrap intervals. The independent
+model-level unit remains the world-model training seed; repeated probe initializations quantify
+head-fitting sensitivity and must not be reported as world-model replications.
+
+A separate `input-grouping` DINO probe compares synchronized ten-POV input with an equal-volume
+cross-match shuffled input before MIRA training. It is an auxiliary information-content control,
+not evidence that a trained world model learned synchronization.
+
 ## Reporting and interpretation
 
 - Preserve individual seed JSON files; never report only the best seed.
@@ -403,6 +435,8 @@ or copying from a live training volume.
 - Unattended final certification guard: `scripts/watch_cs2_rebuttal_audit.sh`
 - GH200 matched control: `scripts/run_cs2_gh200_sync_control.sh`
 - GH200 held-out evaluation: `scripts/run_cs2_gh200_sync_control_eval.sh`
+- Frozen MIRA context features: `scripts/extract_cs2_future_event_features.py`
+- Causal frozen-checkpoint event probe: `scripts/run_cs2_frozen_event_probe.sh`
 - GH200 completed-run audit: `scripts/audit_cs2_gh200_sync_control.py`
 - GH200 training-seed aggregate: `scripts/summarize_cs2_gh200_sweep.py`
 - Completed pilot audit: `scripts/audit_cs2_rebuttal_run.py`
