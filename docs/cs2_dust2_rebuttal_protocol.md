@@ -128,6 +128,52 @@ trained model uses aligned action conditioning, while generated action adherence
 separately with the common temporal action-recognition and optical-flow suite. Pixel MSE and
 Frechet appearance metrics are secondary and cannot by themselves establish action adherence.
 
+### Fresh single-MIRA endpoint result (completed 2026-07-26 UTC)
+
+The fixed endpoint completed without test-based stopping. The codec checkpoint at step 18,000 has
+SHA-256 `3c286c59b74cd141e72af69cde1a0a005142d8d2b472c789cdf2a39a140c4b7a`;
+the single-WM checkpoint at step 15,000 has SHA-256
+`3dbd8f0e43dbe833a5f36370d75f6306c7aa036dfcd3edba767ab138232fa047`.
+Training used clean commit `686d3213c3831dea265952b4ead3a79af6f6fb43`. The following results
+are for the one preregistered training seed, not independent training replicates:
+
+- Native denoising loss at midpoint was `0.41547` with true actions and `0.45681` with
+  same-POV-slot cross-round actions. The paired degradation was `+0.04134` (`+9.95%` relative to
+  true), with a 69-round cluster-bootstrap 95% CI of `[0.03909, 0.04364]`; all 69 round means were
+  positive. At first death the corresponding values were `0.47360` and `0.51634`, a degradation of
+  `+0.04274` (`+9.03%`), CI `[0.04015, 0.04555]`, again positive for all 69 rounds.
+- In the separately generated midpoint rollouts, world-view RAFT flow EPE was `0.03524` with true
+  actions and `0.04105` with cross-round shuffled actions. Thus true actions reduced EPE by
+  `14.2%`; the paired shuffled-minus-true delta was `+0.005812`, CI
+  `[0.004953, 0.006698]`, positive in 66/69 rounds. Global-camera flow EPE was `0.02721` versus
+  `0.03285`, a `17.2%` reduction and delta `+0.005639`, CI `[0.004744, 0.006576]`,
+  positive in 66/69 rounds.
+- A frozen 4.15M-parameter temporal action-recoverability probe was selected on real
+  training/validation video only (validation macro average precision `0.63344`). On generated
+  midpoint video, the preregistered true-target alignment separation was `+0.01470`, with a
+  69-round cluster-bootstrap CI of `[0.00659, 0.02893]`. The true-versus-zero separation was
+  `+0.02157`, CI `[0.01374, 0.03616]`.
+
+These three measurements answer different failure modes. Native loss establishes that this MIRA
+checkpoint uses the aligned controls; RAFT shows that the benefit reaches generated camera/world
+motion; and temporal action recoverability gives action-semantic evidence beyond pixels and flow.
+They support action conditioning for this small single-WM Dust2 baseline. They do not establish
+perfect pixel prediction, event-level weapon fidelity, a synchronization benefit, convergence, or
+the performance of MIRA's full 1B/DINOv3 configuration.
+
+The first standalone generated-rollout export correctly failed before completing a sample because
+the operational wrapper enabled deterministic PyTorch algorithms without setting the required
+CuBLAS workspace before Python startup. The partial temporary arrays and traceback are preserved
+outside the accepted endpoint. Commit `4363a9b1789d6a549f94e69d9f1bdcc24ebae4d4` sets
+`CUBLAS_WORKSPACE_CONFIG=:4096:8` in the public exporter before importing PyTorch; it changes
+neither training nor the frozen checkpoint. The clean retry produced the accepted archive.
+
+`scripts/audit_cs2_single_confirmatory_endpoint.py` independently rehashes and fails closed over
+the manifest, checkpoint, all 24 native evaluation cells and their 69-round sidecars, generated
+arrays, RAFT rows, temporal-probe checkpoint and feature archives, action-recoverability artifacts,
+and recovery provenance. The completed audit status is `pass`; its report SHA-256 is
+`4722361e89c9c5e83d1f60f2dbe78a663a49e3fb44152105ae42b047ec6dc0ae`.
+
 ## Pilot question: single versus shared MIRA
 
 Question: under an equal GPU wall-clock budget, does a ten-POV shared MIRA baseline trained on
@@ -351,6 +397,7 @@ or copying from a live training volume.
 - GH200 completed-run audit: `scripts/audit_cs2_gh200_sync_control.py`
 - GH200 training-seed aggregate: `scripts/summarize_cs2_gh200_sweep.py`
 - Completed pilot audit: `scripts/audit_cs2_rebuttal_run.py`
+- Fresh single-MIRA endpoint audit: `scripts/audit_cs2_single_confirmatory_endpoint.py`
 
 Every launcher records the code commit/status/patch, resolved Hydra configuration, dataset
 selection, checkpoint hashes, environment lock hashes, installed packages, GPU details, and local
