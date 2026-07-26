@@ -108,6 +108,12 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=37)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--prefetch-factor", type=int, default=2)
+    parser.add_argument(
+        "--max-windows-per-split",
+        type=int,
+        default=None,
+        help="Optional deterministic smoke-test cap; publication extraction leaves this unset.",
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument(
         "--autocast-dtype",
@@ -180,6 +186,11 @@ def main() -> int:
         )
         windows = 0
         for batch, metadata in loader:
+            if (
+                args.max_windows_per_split is not None
+                and windows >= args.max_windows_per_split
+            ):
+                break
             if len(metadata) != 10:
                 raise ValueError(f"{split}: expected one ten-POV group, got {len(metadata)} rows")
             features = extract_context_features(
@@ -246,6 +257,7 @@ def main() -> int:
         "feature_rows": len(index),
         "feature_dim": int(embeddings.shape[1]),
         "split_windows": split_counts,
+        "max_windows_per_split": args.max_windows_per_split,
         "seed": args.seed,
         "autocast_dtype": args.autocast_dtype,
         "strict_deterministic": True,
