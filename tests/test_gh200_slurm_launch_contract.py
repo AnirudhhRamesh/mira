@@ -128,7 +128,12 @@ def test_clariden_wrapper_uses_pinned_arm64_pytorch_uenv() -> None:
     config = (ROOT / "scripts" / "clariden_sync_sweep.env.example").read_text()
     for text in (setup, prepare, config):
         assert "pytorch/v2.8.0:v1" in text
-    assert "torchcodec==0.7.0" in setup
+    assert "7dd6092b40a76a262b633c591d8edb6ce0a86c11" in setup
+    assert "--branch v0.7.0" in setup
+    assert "--no-build-isolation" in setup
+    assert '--editable "$torchcodec_source"' in setup
+    assert "https://download.pytorch.org/whl/cpu" not in setup
+    assert '"torchcodec_install": "source-editable"' in setup
     assert "22dad05a3f2fd6c242a56e55e1eb2af61ed42385" in setup
     assert "--system-site-packages" in setup
     assert "platform.machine()" in setup
