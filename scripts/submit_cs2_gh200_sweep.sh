@@ -107,9 +107,12 @@ for seed in "${training_seeds[@]}"; do
     exit 1
   fi
 done
-for path in "$output_root/sweep_summary.json" "$output_root/event_probe_sweep_summary.json"; do
+for path in \
+  "$output_root/submission_manifest.json" \
+  "$output_root/sweep_summary.json" \
+  "$output_root/event_probe_sweep_summary.json"; do
   if [[ -e "$path" ]]; then
-    echo "Refusing to overwrite an existing final result: $path" >&2
+    echo "Refusing to reuse an already submitted or finalized sweep: $path" >&2
     exit 1
   fi
 done

@@ -141,6 +141,8 @@ def test_login_node_submitter_does_not_execute_uenv_python() -> None:
     assert "CS1K_SUBMIT_PYTHON" in text
     assert '"$submit_python" - \\' in text
     assert '[[ ! -x "$path" && ! -L "$path" ]]' in text
+    assert '"$output_root/submission_manifest.json"' in text
+    assert "Refusing to reuse an already submitted or finalized sweep" in text
 
 
 def _initialize_clean_repo(path: Path) -> None:
