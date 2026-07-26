@@ -23,6 +23,8 @@ def test_gh200_shell_entrypoints_parse() -> None:
         ROOT / "scripts" / "submit_cs2_gh200_sweep.sh",
         ROOT / "scripts" / "setup_cs2_clariden_uenv.sh",
         ROOT / "scripts" / "prepare_and_submit_cs2_clariden_sweep.sh",
+        ROOT / "scripts" / "run_cs2_clariden_dataset_stage.sh",
+        ROOT / "scripts" / "submit_cs2_clariden_dataset_stage.sh",
     ]
     subprocess.run(["bash", "-n", *map(str, scripts)], check=True)
 
@@ -143,6 +145,23 @@ def test_login_node_submitter_does_not_execute_uenv_python() -> None:
     assert '[[ ! -x "$path" && ! -L "$path" ]]' in text
     assert '"$output_root/submission_manifest.json"' in text
     assert "Refusing to reuse an already submitted or finalized sweep" in text
+
+
+def test_clariden_dataset_stage_is_pinned_and_fail_closed() -> None:
+    download = (ROOT / "scripts" / "download_cs2_dust2_subset.py").read_text()
+    worker = (ROOT / "scripts" / "run_cs2_clariden_dataset_stage.sh").read_text()
+    submit = (ROOT / "scripts" / "submit_cs2_clariden_dataset_stage.sh").read_text()
+    assert "5a105b6e470407769d17fd14d73ef44e21b61b9a" in download
+    assert "509e628617aa2ff2af3e848cf1aec89592a4c94b" in download
+    assert "EXPECTED_DUST2_SAMPLES = 9_410" in download
+    assert "EXPECTED_DUST2_SHARDS = 116" in download
+    assert "snapshot_download(" in download
+    assert "--splits train val test pilot_test" in worker
+    assert "cs2_train.scripts.materialize_dust2_subset" in worker
+    assert "materialization_provenance.json" in worker
+    assert "33abbb623072932431871a612620110c473d4b664c52010e5763c273c6daf10e" in worker
+    assert "--job-name=mira-cs2-dataset-stage" in submit
+    assert "dataset_stage_complete.json" in submit
 
 
 def _initialize_clean_repo(path: Path) -> None:

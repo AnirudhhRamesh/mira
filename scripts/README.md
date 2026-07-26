@@ -40,6 +40,11 @@ Hydra applications for training, evaluation, and serving. Each reads its config 
 - `setup_cs2_clariden_uenv.sh` — idempotent environment preparation invoked by the preferred
   wrapper. It verifies ARM64 and PyTorch 2.8, pins TorchCodec 0.7, installs both clean public
   checkouts into one uenv-layered venv, and records the exact package/runtime provenance.
+- `submit_cs2_clariden_dataset_stage.sh` — submit one resumable Clariden batch job that downloads
+  only the 116 pinned 360p Dust2 WebDataset shards, regenerates the frozen confirmatory split,
+  materializes all five payloads for 9,410 samples, and verifies the publication hashes. Its worker
+  is `run_cs2_clariden_dataset_stage.sh`; the pinned Hugging Face selection is implemented by
+  `download_cs2_dust2_subset.py`.
 - `run_cs2_frozen_event_probe_slurm_seed.sh` — dependent one-GPU event job for one passing
   fixed-update child audit, with explicit common-step checkpoints and frozen single-MIRA hash.
 - `run_cs2_gh200_sweep_finalize.sh` — dependent fail-closed aggregation job; writes
