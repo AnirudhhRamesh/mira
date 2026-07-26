@@ -84,13 +84,23 @@ The same pre-training audit found that the earlier adapter sampled ordinary wind
 rendered round rather than the player-controlled alive interval. The public adapter now binds
 `alive_end_frame` from the frozen manifest into every sample and restricts all random/midpoint
 plans to it. This is a CS2 data-validity correction: the MIRA model, codec, loss, action encoder,
-and normalizations are unchanged.
+and normalization path are not otherwise changed by the alive-window fix.
 
 ### Fresh single-MIRA endpoint (frozen 2026-07-25 UTC)
 
 The corrected single-POV MIRA baseline is retrained from scratch before any model reads the
-untouched 690-POV test split. It uses the unchanged public MIRA codec and single-world-model
-architectures plus only the dataset/action adapter described above.
+untouched 690-POV test split. Baseline naming is deliberately narrow: this is MIRA's native
+single-world-model architecture, diagonal flow-matching objective, causal conditioning path, and
+action encoder instantiated with the 44.83M-parameter `cs2_small` transformer configuration, not
+the upstream 1B configuration. The action encoder's existing mouse clamp/divisor is exposed as a
+configuration value and set to 180 degrees for CS2 angular deltas; its embedding and temporal
+pooling math are unchanged.
+
+The frozen 123.02M-parameter RAEv2 codec retains MIRA's decoder and loss structure but uses the
+public DINOv2 ViT-B/14 backbone and corresponding patch geometry because the manually gated
+upstream DINOv3 weights are unavailable on the worker. The result must therefore be labeled
+“MIRA architecture, small single-WM, public-backbone baseline,” not a full released-MIRA,
+1B/DINOv3, or scaling reproduction.
 
 - A fresh codec is trained on `train` only through optimizer step 18,000, with seed 28, batch size
   4, strict deterministic kernels, no compilation, and validation-only checks every 6,000 steps.
