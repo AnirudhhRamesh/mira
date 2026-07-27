@@ -109,8 +109,17 @@ def draw_text_on_first_frame(video: Tensor, texts: list[str]) -> Tensor:
         draw = ImageDraw.Draw(img, "RGBA")
         try:
             font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
-        except OSError:
-            font = ImageFont.load_default()
+        except (ImportError, OSError):
+            bitmap_font_loader = getattr(ImageFont, "load_default_imagefont", None)
+            if bitmap_font_loader is not None:
+                font = bitmap_font_loader()
+            else:
+                try:
+                    font = ImageFont.load_default()
+                except (ImportError, OSError):
+                    # Text is diagnostic metadata. Preserve the rollout itself on Pillow builds
+                    # that expose neither FreeType nor the bundled bitmap font.
+                    continue
         bbox = draw.textbbox((0, 0), text, font=font)
         text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
         padding = 4

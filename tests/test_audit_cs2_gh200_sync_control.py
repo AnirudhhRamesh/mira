@@ -500,7 +500,7 @@ def test_audits_complete_first_death_action_grid(tmp_path: Path, monkeypatch) ->
         root,
         label="death_action",
         window_mode="first-death",
-        training_commit=COMMIT,
+        evaluator_commit=COMMIT,
         checkpoint_hashes=checkpoint_hashes,
     )
 
@@ -508,9 +508,9 @@ def test_audits_complete_first_death_action_grid(tmp_path: Path, monkeypatch) ->
     (provenance / "window_mode.txt").write_text("midpoint\n")
     with pytest.raises(ValueError, match="death_action.provenance.window_mode"):
         auditor._audit_action_evaluation(
-            root,
-            label="death_action",
-            window_mode="first-death",
-            training_commit=COMMIT,
-            checkpoint_hashes=checkpoint_hashes,
-        )
+                root,
+                label="death_action",
+                window_mode="first-death",
+                evaluator_commit=COMMIT,
+                checkpoint_hashes=checkpoint_hashes,
+            )

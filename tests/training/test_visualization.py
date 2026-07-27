@@ -12,6 +12,7 @@ import torch
 
 from mira.training.visualization import (
     add_prediction_border,
+    draw_text_on_first_frame,
     video_to_uint8,
     videos_to_grid,
     write_video_ffmpeg,
@@ -41,6 +42,21 @@ def test_add_prediction_border_marks_later_frames() -> None:
     assert out[0, 0].sum() == 0
     assert out[0, 2, 0, 0, 0] == 255  # red channel set on the border
     assert out[0, 2, 1, 0, 0] == 0
+
+
+def test_draw_text_falls_back_when_pillow_lacks_freetype(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable_truetype(*_args, **_kwargs):
+        raise ImportError("cannot import name '_imagingft' from 'PIL'")
+
+    monkeypatch.setattr("mira.training.visualization.ImageFont.truetype", unavailable_truetype)
+    video = torch.zeros((1, 2, 3, 64, 128), dtype=torch.uint8)
+    output = draw_text_on_first_frame(video, ["fallback"])
+
+    assert output.shape == video.shape
+    assert output[0, 0].count_nonzero() > 0
+    assert output[0, 1].count_nonzero() == 0
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not on PATH")

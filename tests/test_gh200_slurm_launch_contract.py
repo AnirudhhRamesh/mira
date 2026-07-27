@@ -124,6 +124,28 @@ def test_complete_sweep_submitter_builds_fail_closed_dependency_dag() -> None:
     assert "loader_selection_reuse" in text
 
 
+def test_posttrain_recovery_reuses_checkpoints_without_training_or_preflight() -> None:
+    worker = (ROOT / "scripts" / "run_cs2_gh200_posttrain_eval_slurm_seed.sh").read_text()
+    submit = (ROOT / "scripts" / "submit_cs2_gh200_posttrain_recovery.sh").read_text()
+    prepare = (
+        ROOT / "scripts" / "prepare_and_submit_cs2_clariden_posttrain_recovery.sh"
+    ).read_text()
+
+    assert "checkpoint-$final_step/checkpoint.pth" in worker
+    assert "training_termination.json" in worker
+    assert "run_cs2_gh200_sync_control_eval.sh" in worker
+    assert "run_cs2_gh200_sync_control.sh" not in worker
+    assert "run_cs2_gh200_loader_preflight.sh" not in worker
+    assert "CS1K_EXPECTED_TRAINING_COMMIT" in worker
+    assert "CS1K_EXPECTED_MIRA_COMMIT" in worker
+    assert '--dependency="afterok:$eval_job_id"' in submit
+    assert '--dependency="afterok:$event_dependency"' in submit
+    assert "posttrain_recovery_manifest.json" in submit
+    assert "run_cs2_gh200_posttrain_eval_slurm_seed.sh" in submit
+    assert "run_cs2_frozen_event_probe_slurm_seed.sh" in submit
+    assert "setup_cs2_clariden_uenv.sh" not in prepare
+
+
 def test_dependent_event_job_uses_exact_fixed_step_checkpoints() -> None:
     text = (ROOT / "scripts" / "run_cs2_frozen_event_probe_slurm_seed.sh").read_text()
     assert "checkpoint_index=$((train_steps - 1))" in text

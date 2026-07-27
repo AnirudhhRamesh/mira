@@ -82,6 +82,7 @@ class Auditor:
     train_steps: int
     arm_hours: float
     expected_training_commit: str | None = None
+    expected_evaluator_commit: str | None = None
     checks: dict[str, Any] = field(default_factory=dict)
 
     def require(self, name: str, condition: bool, evidence: Any) -> None:
@@ -565,11 +566,12 @@ class Auditor:
         )
         return results
 
-    def _audit_eval_provenance(self, root: Path, training_commit: str) -> None:
+    def _audit_eval_provenance(self, root: Path, evaluator_commit: str) -> None:
         provenance = root / "provenance"
         self.require(
             f"{root.name}.evaluator_commit",
-            (provenance / "evaluator_code_commit.txt").read_text(encoding="utf-8").strip() == training_commit,
+            (provenance / "evaluator_code_commit.txt").read_text(encoding="utf-8").strip()
+            == evaluator_commit,
             (provenance / "evaluator_code_commit.txt").read_text(encoding="utf-8").strip(),
         )
         self.require(
@@ -589,10 +591,10 @@ class Auditor:
         *,
         label: str,
         window_mode: str,
-        training_commit: str,
+        evaluator_commit: str,
         checkpoint_hashes: dict[str, str],
     ) -> str:
-        self._audit_eval_provenance(root, training_commit)
+        self._audit_eval_provenance(root, evaluator_commit)
         recorded_window = (root / "provenance" / "window_mode.txt").read_text(encoding="utf-8").strip()
         self.require(
             f"{label}.provenance.window_mode",
@@ -672,13 +674,15 @@ class Auditor:
         return str(root / "summary.json")
 
     def audit_evaluation(
-        self, training_commit: str, checkpoints: dict[str, dict[str, Any]]
+        self,
+        evaluator_commit: str,
+        checkpoints: dict[str, dict[str, Any]],
     ) -> dict[str, str]:
         primary = self.root / "evaluation" / "synchronized_test_seed_sweep"
         action = self.root / "evaluation" / "synchronized_test_action_loss_seed_sweep"
         death_action = self.root / "evaluation" / "synchronized_test_first_death_action_loss_seed_sweep"
         checkpoint_hashes = {arm: checkpoints[arm]["checkpoint_sha256"] for arm in ARMS}
-        self._audit_eval_provenance(primary, training_commit)
+        self._audit_eval_provenance(primary, evaluator_commit)
 
         primary_summary = _read_json(primary / "summary.json")
         expected_primary = {
@@ -751,14 +755,14 @@ class Auditor:
             action,
             label="action",
             window_mode="midpoint",
-            training_commit=training_commit,
+            evaluator_commit=evaluator_commit,
             checkpoint_hashes=checkpoint_hashes,
         )
         death_action_summary = self._audit_action_evaluation(
             death_action,
             label="death_action",
             window_mode="first-death",
-            training_commit=training_commit,
+            evaluator_commit=evaluator_commit,
             checkpoint_hashes=checkpoint_hashes,
         )
         return {
@@ -772,12 +776,14 @@ class Auditor:
         commit, loader, seed, order = self.audit_nodes()
         self.audit_status(order)
         checkpoints = self.audit_training(seed, loader)
-        evaluation = self.audit_evaluation(commit, checkpoints)
+        evaluator_commit = self.expected_evaluator_commit or commit
+        evaluation = self.audit_evaluation(evaluator_commit, checkpoints)
         return {
             "schema": "mira-cs2-gh200-sync-control-audit-v3",
             "status": "pass",
             "experiment_root": str(self.root.resolve()),
             "training_commit": commit,
+            "evaluator_commit": evaluator_commit,
             "seed": seed,
             "arm_order": list(order),
             "train_steps": self.train_steps,
@@ -796,6 +802,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-steps", type=int, required=True)
     parser.add_argument("--arm-hours", type=float, required=True)
     parser.add_argument("--expected-training-commit")
+    parser.add_argument("--expected-evaluator-commit")
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
@@ -809,6 +816,7 @@ def main() -> None:
         train_steps=args.train_steps,
         arm_hours=args.arm_hours,
         expected_training_commit=args.expected_training_commit,
+        expected_evaluator_commit=args.expected_evaluator_commit,
     ).run()
     output = args.output or args.experiment_root / "audit.json"
     output.parent.mkdir(parents=True, exist_ok=True)

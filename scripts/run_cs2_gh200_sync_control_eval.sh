@@ -16,12 +16,17 @@ action_eval_root=${CS1K_ACTION_EVAL_ROOT:-$training_root/evaluation/synchronized
 death_action_eval_root=${CS1K_DEATH_ACTION_EVAL_ROOT:-$training_root/evaluation/synchronized_test_first_death_action_loss_seed_sweep}
 eval_seeds=${CS1K_EVAL_SEEDS:-"37 38 39 40 41"}
 action_modes=${CS1K_ACTION_MODES:-"true batch-shifted time-shifted zero"}
+expected_training_commit=${CS1K_EXPECTED_TRAINING_COMMIT:-}
 
 cd "$project_dir"
 export PYTHONPATH="$project_dir/src${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONDONTWRITEBYTECODE=1
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export WANDB_MODE=disabled
+evaluator_commit=$(git rev-parse HEAD)
+if [[ -z "$expected_training_commit" ]]; then
+  expected_training_commit=$evaluator_commit
+fi
 
 if [[ -n "$(git status --porcelain=v1)" ]]; then
   echo "GH200 publication evaluation requires a clean source tree" >&2
@@ -252,4 +257,5 @@ PY
   --split-provenance "$split_provenance" \
   --train-steps "$train_steps" \
   --arm-hours "$arm_hours" \
-  --expected-training-commit "$(git rev-parse HEAD)"
+  --expected-training-commit "$expected_training_commit" \
+  --expected-evaluator-commit "$evaluator_commit"
