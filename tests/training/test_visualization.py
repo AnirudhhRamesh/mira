@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -49,3 +50,32 @@ def test_write_video_ffmpeg_produces_a_file() -> None:
         out = Path(d) / "clip.mp4"
         write_video_ffmpeg(out, video, fps=10)
         assert out.is_file() and out.stat().st_size > 0
+
+
+def test_write_video_ffmpeg_falls_back_when_libx264_options_are_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_kwargs) -> subprocess.CompletedProcess:
+        calls.append(cmd)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(
+                cmd,
+                8,
+                stderr=b"Unrecognized option 'preset'.\nError splitting the argument list: Option not found",
+            )
+        return subprocess.CompletedProcess(cmd, 0, stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    write_video_ffmpeg(
+        "rollout.mp4",
+        torch.zeros((2, 3, 16, 16), dtype=torch.uint8),
+    )
+
+    assert len(calls) == 2
+    assert "libx264" in calls[0]
+    assert "-preset" in calls[0]
+    assert "mpeg4" in calls[1]
+    assert "-preset" not in calls[1]
+    assert "-crf" not in calls[1]

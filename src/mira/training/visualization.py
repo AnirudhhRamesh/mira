@@ -146,7 +146,7 @@ def write_video_ffmpeg(
         "-i",
         "-",
     ]
-    out_args = [
+    preferred_out_args = [
         "-vcodec",
         video_codec,
         "-preset",
@@ -157,11 +157,55 @@ def write_video_ffmpeg(
         "yuv420p",
     ]
 
-    cmd = ["ffmpeg", "-y", *v_args, *out_args, str(filename)]
-    res = subprocess.run(cmd, input=video_np.tobytes(), capture_output=True, timeout=120)
+    cmd = ["ffmpeg", "-y", *v_args, *preferred_out_args, str(filename)]
+    res = subprocess.run(
+        cmd,
+        input=video_np.tobytes(),
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
 
-    if res.returncode:
-        raise RuntimeError(f"ffmpeg failed ({res.returncode}):\n{res.stderr.decode()}")
+    if not res.returncode:
+        return
+
+    preferred_error = res.stderr.decode(errors="replace")
+    codec_unavailable = (
+        video_codec == "libx264"
+        and (
+            "Unrecognized option 'preset'" in preferred_error
+            or "Option not found" in preferred_error
+            or "Unknown encoder 'libx264'" in preferred_error
+        )
+    )
+    if not codec_unavailable:
+        raise RuntimeError(f"ffmpeg failed ({res.returncode}):\n{preferred_error}")
+
+    # Some HPC FFmpeg builds intentionally omit libx264 and therefore do not recognize its
+    # private ``-preset``/``-crf`` options. MPEG-4 Part 2 is built into FFmpeg, works in an MP4
+    # container, and is sufficient for diagnostic rollout traces.
+    fallback_out_args = [
+        "-vcodec",
+        "mpeg4",
+        "-q:v",
+        "5",
+        "-pix_fmt",
+        "yuv420p",
+    ]
+    fallback_cmd = ["ffmpeg", "-y", *v_args, *fallback_out_args, str(filename)]
+    fallback_res = subprocess.run(
+        fallback_cmd,
+        input=video_np.tobytes(),
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
+    if fallback_res.returncode:
+        fallback_error = fallback_res.stderr.decode(errors="replace")
+        raise RuntimeError(
+            f"ffmpeg preferred codec failed ({res.returncode}):\n{preferred_error}\n"
+            f"ffmpeg MPEG-4 fallback failed ({fallback_res.returncode}):\n{fallback_error}"
+        )
 
 
 class VideoForWandb(BaseModel):
