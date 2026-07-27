@@ -45,6 +45,10 @@ Hydra applications for training, evaluation, and serving. Each reads its config 
   materializes all five payloads for 9,410 samples, and verifies the publication hashes. Its worker
   is `run_cs2_clariden_dataset_stage.sh`; the pinned Hugging Face selection is implemented by
   `download_cs2_dust2_subset.py`.
+- `stage_cs2_frozen_endpoints.sh` — atomically install the immutable codec and single-MIRA
+  comparison endpoint from a short-lived download URL. It verifies the bundle member list, bundle
+  SHA-256, and all four extracted file hashes against
+  `configs/frozen_dust2_endpoints_v1.json`, and refuses conflicting destinations.
 - `run_cs2_frozen_event_probe_slurm_seed.sh` — dependent one-GPU event job for one passing
   fixed-update child audit, with explicit common-step checkpoints and frozen single-MIRA hash.
 - `run_cs2_gh200_sweep_finalize.sh` — dependent fail-closed aggregation job; writes
