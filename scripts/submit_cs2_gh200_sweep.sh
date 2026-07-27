@@ -45,8 +45,9 @@ training_seed_text=${CS1K_TRAINING_SEEDS:-"28 29 30"}
 expected_manifest_sha256=33abbb623072932431871a612620110c473d4b664c52010e5763c273c6daf10e
 expected_codec_sha256=${CS1K_EXPECTED_CODEC_CHECKPOINT_SHA256:-3c286c59b74cd141e72af69cde1a0a005142d8d2b472c789cdf2a39a140c4b7a}
 expected_single_sha256=${CS1K_EXPECTED_SINGLE_CHECKPOINT_SHA256:-3dbd8f0e43dbe833a5f36370d75f6306c7aa036dfcd3edba767ab138232fa047}
+reuse_loader_selection=${CS1K_REUSE_LOADER_SELECTION:-}
 
-for command_name in git sbatch sha256sum "$submit_python"; do
+for command_name in git realpath sbatch sha256sum "$submit_python"; do
   if ! command -v "$command_name" >/dev/null; then
     echo "Required command not found: $command_name" >&2
     exit 1
@@ -95,6 +96,16 @@ fi
 if [[ "$(sha256sum "$single_checkpoint" | cut -d' ' -f1)" != "$expected_single_sha256" ]]; then
   echo "Single-MIRA checkpoint SHA-256 drifted" >&2
   exit 1
+fi
+reuse_loader_selection_sha256=
+if [[ -n "$reuse_loader_selection" ]]; then
+  if [[ ! -s "$reuse_loader_selection" ]]; then
+    echo "Reusable loader selection is absent: $reuse_loader_selection" >&2
+    exit 1
+  fi
+  reuse_loader_selection=$(realpath "$reuse_loader_selection")
+  reuse_loader_selection_sha256=$(sha256sum "$reuse_loader_selection" | cut -d' ' -f1)
+  export CS1K_REUSE_LOADER_SELECTION="$reuse_loader_selection"
 fi
 if ! [[ "$train_steps" =~ ^[1-9][0-9]*$ ]]; then
   echo "CS1K_TRAIN_STEPS must be a positive integer" >&2
@@ -234,6 +245,8 @@ submission_manifest=$output_root/submission_manifest.json
   "$expected_codec_sha256" \
   "$single_checkpoint" \
   "$expected_single_sha256" \
+  "$reuse_loader_selection" \
+  "$reuse_loader_selection_sha256" \
   "$train_steps" \
   "$arm_hours" \
   "$finalize_job_id" \
@@ -256,6 +269,8 @@ from pathlib import Path
     codec_checkpoint_sha256,
     single_checkpoint,
     single_checkpoint_sha256,
+    reuse_loader_selection,
+    reuse_loader_selection_sha256,
     train_steps,
     arm_hours,
     finalize_job_id,
@@ -298,6 +313,15 @@ payload = {
         "codec_checkpoint_sha256": codec_checkpoint_sha256,
         "single_checkpoint_path": single_checkpoint,
         "single_checkpoint_sha256": single_checkpoint_sha256,
+        "loader_selection_reuse": (
+            {
+                "path": reuse_loader_selection,
+                "sha256": reuse_loader_selection_sha256,
+                "current_node_smoke_required": True,
+            }
+            if reuse_loader_selection
+            else None
+        ),
         "final_results": ["sweep_summary.json", "event_probe_sweep_summary.json"],
     },
 }

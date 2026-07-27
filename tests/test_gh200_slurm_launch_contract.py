@@ -75,6 +75,11 @@ def test_slurm_orchestrator_requests_exact_one_node_four_gpu_topology() -> None:
     assert "export NNODES=1" in text
     assert "export NPROC_PER_NODE=4" in text
     assert "import torch.distributed.run" in text
+    assert "prepare_dinov2_cache.py" in text
+    assert "CS1K_REUSE_LOADER_SELECTION" in text
+    assert "validate_cs2_reused_loader_selection.py" in text
+    assert "--warmup-batches 1" in text
+    assert "--timed-batches 2" in text
     assert "--num-workers auto" in text
     assert "--expected-host-count 1" in text
     assert "--nodes=4" not in text
@@ -116,6 +121,7 @@ def test_complete_sweep_submitter_builds_fail_closed_dependency_dag() -> None:
     assert "submission_manifest.json" in text
     assert "CS1K_EXPECTED_CODEC_CHECKPOINT_SHA256" in text
     assert "codec_checkpoint_sha256" in text
+    assert "loader_selection_reuse" in text
 
 
 def test_dependent_event_job_uses_exact_fixed_step_checkpoints() -> None:

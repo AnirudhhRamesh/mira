@@ -206,6 +206,136 @@ def test_audit_nodes_requires_one_full_four_gh200_node(tmp_path: Path, monkeypat
         auditor.audit_nodes()
 
 
+def test_audit_nodes_accepts_reused_selection_with_current_smoke(
+    tmp_path: Path, monkeypatch
+) -> None:
+    auditor = _auditor(tmp_path, monkeypatch)
+    hostname = "nid-new"
+    selected = {
+        "num_workers": 12,
+        "prefetch_factor": 2,
+        "persistent_workers": True,
+        "pin_memory": True,
+    }
+    global_loader = {
+        "schema": "mira-cs2-frozen-loader-selection-v1",
+        "status": "pass",
+        "expected_git_commit": "2" * 40,
+        "expected_gpu_substring": "GH200",
+        "expected_hostname": None,
+        "expected_manifest_sha256": AUDIT.EXPECTED_MANIFEST_SHA256,
+        "benchmark_host_repeat_counts": {"nid-old": 3},
+        "benchmark_inputs": [
+            {
+                "hostname": "nid-old",
+                "manifest_sha256": AUDIT.EXPECTED_MANIFEST_SHA256,
+            }
+            for _ in range(3)
+        ],
+        "selected_config": selected,
+        "selection_evidence": {
+            "rule": AUDIT.GLOBAL_LOADER_SELECTION_RULE,
+            "selected_num_workers": 12,
+        },
+    }
+    global_text = json.dumps(global_loader, sort_keys=True)
+    global_hash = hashlib.sha256(global_text.encode()).hexdigest()
+    smoke = {
+        "schema": "mira-cs2-dataloader-benchmark-v1",
+        "status": "pass",
+        "provenance": {
+            "git_clean": True,
+            "git_commit": COMMIT,
+            "hostname": hostname,
+            "manifest_sha256": AUDIT.EXPECTED_MANIFEST_SHA256,
+            "gpu": "NVIDIA GH200 120GB",
+        },
+        "results": [
+            {"group_mode": mode, "status": "pass"}
+            for mode in ("synchronized", "shuffled")
+        ],
+    }
+    smoke_text = json.dumps(smoke, sort_keys=True)
+    smoke_hash = hashlib.sha256(smoke_text.encode()).hexdigest()
+    node_loader = {
+        "schema": "mira-cs2-reused-loader-selection-v1",
+        "status": "pass",
+        "expected_git_commit": COMMIT,
+        "expected_gpu_substring": "GH200",
+        "expected_hostname": hostname,
+        "expected_manifest_sha256": AUDIT.EXPECTED_MANIFEST_SHA256,
+        "selected_config": selected,
+        "source_selection": {
+            "sha256": global_hash,
+            "git_commit": "2" * 40,
+            "benchmark_host_repeat_counts": {"nid-old": 3},
+            "benchmark_input_count": 3,
+        },
+        "current_node_smoke": {"sha256": smoke_hash},
+    }
+    node_loader_text = json.dumps(node_loader, sort_keys=True)
+    node = auditor.root / "provenance" / "node_0"
+    node.mkdir(parents=True)
+    (node / "code_commit.txt").write_text(COMMIT + "\n", encoding="utf-8")
+    (node / "code_status.txt").write_text("", encoding="utf-8")
+    (node / "code.patch").write_text("", encoding="utf-8")
+    (node / "nvidia_smi_q.txt").write_text(
+        "Product Name : NVIDIA GH200\n" * 4,
+        encoding="utf-8",
+    )
+    (node / "gpu_timeseries.csv").write_text("header\nsample\n", encoding="utf-8")
+    (node / "global_loader_selection.json").write_text(global_text, encoding="utf-8")
+    (node / "loader_smoke.json").write_text(smoke_text, encoding="utf-8")
+    (node / "frozen_loader_selection.json").write_text(node_loader_text, encoding="utf-8")
+    launcher = {
+        "seed": "28",
+        "train_steps": "10000",
+        "arm_hours": "12.0",
+        "arm_order": "synchronized,shuffled",
+        "nnodes": "1",
+        "nproc_per_node": "4",
+        "node_rank": "0",
+        "hostname": hostname,
+        "master_addr": hostname,
+        "master_port": "29500",
+        "scheduler": "slurm",
+        "slurm_job_id": "12345",
+        "slurm_job_nodelist": hostname,
+        "slurm_procid": "0",
+        "slurm_nodeid": "0",
+        "slurm_localid": "0",
+        "slurm_cpus_per_task": "288",
+        "logical_cpus_visible": "288",
+        "visible_gpu_count": "4",
+        "visible_gpu_name": "NVIDIA GH200 120GB",
+        "visible_gpu_names": "|".join(["NVIDIA GH200 120GB"] * 4),
+        "manifest_sha256": AUDIT.EXPECTED_MANIFEST_SHA256,
+        "split_provenance_sha256": _sha256(auditor.split_provenance),
+        "action_routing": "spatial",
+        "dataloader_workers": "12",
+        "dataloader_prefetch_factor": "2",
+        "dataloader_persistent_workers": "true",
+        "dataloader_pin_memory": "true",
+        "loader_selection_mode": "reused",
+        "loader_smoke_sha256": smoke_hash,
+        "global_loader_selection_sha256": global_hash,
+        "frozen_loader_selection_sha256": hashlib.sha256(
+            node_loader_text.encode()
+        ).hexdigest(),
+    }
+    (node / "launcher.env").write_text(
+        "".join(f"{key}={value}\n" for key, value in launcher.items()),
+        encoding="utf-8",
+    )
+
+    commit, observed, seed, order = auditor.audit_nodes()
+
+    assert commit == COMMIT
+    assert observed == selected
+    assert seed == 28
+    assert order == ("synchronized", "shuffled")
+
+
 def _write_fixed_step_training_arm(
     auditor: AUDIT.Auditor,
     arm: str,

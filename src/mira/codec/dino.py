@@ -17,12 +17,11 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any, List
+from typing import Any
 
 import torch
-import torch.nn as nn
 from einops import rearrange
-from torch import Tensor
+from torch import Tensor, nn
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +40,11 @@ DINO_PATCH_SIZE = {
     "dinov3_vitb16": 16,
 }
 DINO_REPOSITORY = {
-    "dinov2_vitb14": "facebookresearch/dinov2",
+    # Pin the hub source so every rank and every training seed executes identical backbone code.
+    # The previous floating default branch also made concurrent DDP cache population unsafe.
+    "dinov2_vitb14": (
+        "facebookresearch/dinov2:7764ea0f912e53c92e82eb78a2a1631e92725fc8"
+    ),
     "dinov3_vitl16": "facebookresearch/dinov3",
     "dinov3_vitb16": "facebookresearch/dinov3",
 }
@@ -111,12 +114,12 @@ class DinoModel(nn.Module):
         else:
             logging.getLogger("dinov3").setLevel(logging.WARNING)  # suppress noisy dinov3 logging
             logger.info(f"Loading DINO model, variant {dino_model}, {compile=}")
-            hub_kwargs: dict[str, Any] = dict(
-                repo_or_dir=DINO_REPOSITORY[dino_model],
-                model=dino_model,
-                source="github",
-                verbose=False,  # Get rid of "Using cache found in ..." message
-            )
+            hub_kwargs: dict[str, Any] = {
+                "repo_or_dir": DINO_REPOSITORY[dino_model],
+                "model": dino_model,
+                "source": "github",
+                "verbose": False,  # Get rid of "Using cache found in ..." message
+            }
             # Load pretrained weights from a local cache dir if RS_DINO_WEIGHTS_DIR provides one;
             # otherwise build without pretrained weights (restored from a codec checkpoint).
             weights_path = resolve_dino_weights(dino_model)
@@ -165,7 +168,7 @@ class DinoModel(nn.Module):
     def image_normalization(self, x: torch.Tensor) -> torch.Tensor:
         return (x - self.mean) / self.std
 
-    def dino_forward(self, x: Tensor) -> List[Tensor]:
+    def dino_forward(self, x: Tensor) -> list[Tensor]:
         b, t, _, h, w = x.shape
         x = rearrange(x, "b t c h w -> (b t) c h w")  # x must be in [0, 1]
         x = self.image_normalization(x)

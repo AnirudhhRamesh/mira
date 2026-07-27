@@ -45,6 +45,8 @@ dataloader_pin_memory=${CS1K_DATALOADER_PIN_MEMORY:?Freeze pin-memory from the G
 loader_benchmark_root=${CS1K_LOADER_BENCHMARK_ROOT:-}
 loader_benchmark_jsons=${CS1K_LOADER_BENCHMARK_JSONS:-}
 global_loader_selection=${CS1K_GLOBAL_LOADER_SELECTION:?Set the frozen loader selection}
+loader_selection_mode=${CS1K_LOADER_SELECTION_MODE:-measured}
+loader_smoke_json=${CS1K_LOADER_SMOKE_JSON:-}
 require_slurm=${CS1K_REQUIRE_SLURM:-true}
 node_hostname=$(hostname)
 
@@ -162,48 +164,66 @@ cp "$global_loader_selection" "$node_provenance/global_loader_selection.json"
   --provenance-output "$split_provenance" \
   --verify-only \
   >"$node_provenance/confirmatory_split_verification.json"
-if [[ -n "$loader_benchmark_root" && -n "$loader_benchmark_jsons" ]]; then
-  echo "Set only one of CS1K_LOADER_BENCHMARK_ROOT or CS1K_LOADER_BENCHMARK_JSONS" >&2
-  exit 1
-fi
-if [[ -n "$loader_benchmark_root" ]]; then
-  benchmark_node_root=$loader_benchmark_root/$node_hostname
-  if [[ ! -d "$benchmark_node_root" ]]; then
-    echo "Node-local loader benchmark directory not found: $benchmark_node_root" >&2
+if [[ "$loader_selection_mode" == measured ]]; then
+  if [[ -n "$loader_benchmark_root" && -n "$loader_benchmark_jsons" ]]; then
+    echo "Set only one of CS1K_LOADER_BENCHMARK_ROOT or CS1K_LOADER_BENCHMARK_JSONS" >&2
     exit 1
   fi
-  mapfile -d '' -t loader_benchmark_paths < <(
-    find "$benchmark_node_root" -maxdepth 1 -type f -name '*.json' -print0 | sort -z
-  )
-elif [[ -n "$loader_benchmark_jsons" ]]; then
-  loader_benchmark_jsons=${loader_benchmark_jsons//\{hostname\}/$node_hostname}
-  read -r -a loader_benchmark_paths <<<"$loader_benchmark_jsons"
+  if [[ -n "$loader_benchmark_root" ]]; then
+    benchmark_node_root=$loader_benchmark_root/$node_hostname
+    if [[ ! -d "$benchmark_node_root" ]]; then
+      echo "Node-local loader benchmark directory not found: $benchmark_node_root" >&2
+      exit 1
+    fi
+    mapfile -d '' -t loader_benchmark_paths < <(
+      find "$benchmark_node_root" -maxdepth 1 -type f -name '*.json' -print0 | sort -z
+    )
+  elif [[ -n "$loader_benchmark_jsons" ]]; then
+    loader_benchmark_jsons=${loader_benchmark_jsons//\{hostname\}/$node_hostname}
+    read -r -a loader_benchmark_paths <<<"$loader_benchmark_jsons"
+  else
+    echo "Provide node-local GH200 evidence through CS1K_LOADER_BENCHMARK_ROOT or JSONS" >&2
+    exit 1
+  fi
+  if [[ ${#loader_benchmark_paths[@]} -lt 3 ]]; then
+    echo "At least three node-local loader benchmark JSONs are required" >&2
+    exit 1
+  fi
+  for benchmark_path in "${loader_benchmark_paths[@]}"; do
+    if [[ ! -f "$benchmark_path" ]]; then
+      echo "Loader benchmark JSON not found: $benchmark_path" >&2
+      exit 1
+    fi
+  done
+  "$python_bin" scripts/validate_cs2_loader_selection.py "${loader_benchmark_paths[@]}" \
+    --num-workers "$dataloader_workers" \
+    --prefetch-factor "$dataloader_prefetch_factor" \
+    --persistent-workers "$dataloader_persistent_workers" \
+    --pin-memory "$dataloader_pin_memory" \
+    --expected-git-commit "$code_commit" \
+    --expected-gpu-substring GH200 \
+    --expected-hostname "$node_hostname" \
+    --expected-host-count 1 \
+    --minimum-repeats-per-hostname 3 \
+    --expected-manifest-sha256 "$(sha256sum "$manifest_path" | cut -d' ' -f1)" \
+    --output "$node_provenance/frozen_loader_selection.json"
+elif [[ "$loader_selection_mode" == reused ]]; then
+  if [[ ! -s "$loader_smoke_json" ]]; then
+    echo "Reused loader selection requires CS1K_LOADER_SMOKE_JSON" >&2
+    exit 1
+  fi
+  cp "$loader_smoke_json" "$node_provenance/loader_smoke.json"
+  "$python_bin" scripts/validate_cs2_reused_loader_selection.py \
+    --selection "$node_provenance/global_loader_selection.json" \
+    --smoke "$node_provenance/loader_smoke.json" \
+    --expected-current-commit "$code_commit" \
+    --expected-manifest-sha256 "$(sha256sum "$manifest_path" | cut -d' ' -f1)" \
+    --expected-hostname "$node_hostname" \
+    --output "$node_provenance/frozen_loader_selection.json"
 else
-  echo "Provide node-local GH200 evidence through CS1K_LOADER_BENCHMARK_ROOT or JSONS" >&2
+  echo "CS1K_LOADER_SELECTION_MODE must be measured or reused" >&2
   exit 1
 fi
-if [[ ${#loader_benchmark_paths[@]} -lt 3 ]]; then
-  echo "At least three node-local loader benchmark JSONs are required" >&2
-  exit 1
-fi
-for benchmark_path in "${loader_benchmark_paths[@]}"; do
-  if [[ ! -f "$benchmark_path" ]]; then
-    echo "Loader benchmark JSON not found: $benchmark_path" >&2
-    exit 1
-  fi
-done
-"$python_bin" scripts/validate_cs2_loader_selection.py "${loader_benchmark_paths[@]}" \
-  --num-workers "$dataloader_workers" \
-  --prefetch-factor "$dataloader_prefetch_factor" \
-  --persistent-workers "$dataloader_persistent_workers" \
-  --pin-memory "$dataloader_pin_memory" \
-  --expected-git-commit "$code_commit" \
-  --expected-gpu-substring GH200 \
-  --expected-hostname "$node_hostname" \
-  --expected-host-count 1 \
-  --minimum-repeats-per-hostname 3 \
-  --expected-manifest-sha256 "$(sha256sum "$manifest_path" | cut -d' ' -f1)" \
-  --output "$node_provenance/frozen_loader_selection.json"
 "$python_bin" scripts/prepare_counterstrike1k.py \
   --data-root "$dataset_dir" \
   --manifest "$manifest_path" \
@@ -229,6 +249,10 @@ for name, version in packages:
 PY
 nvidia-smi -q >"$node_provenance/nvidia_smi_q.txt"
 uname -a >"$node_provenance/uname.txt"
+loader_smoke_sha256=
+if [[ -f "$node_provenance/loader_smoke.json" ]]; then
+  loader_smoke_sha256=$(sha256sum "$node_provenance/loader_smoke.json" | cut -d' ' -f1)
+fi
 printf '%s\n' \
   "seed=$seed" \
   "train_steps=$train_steps" \
@@ -260,6 +284,8 @@ printf '%s\n' \
   "dataloader_prefetch_factor=$dataloader_prefetch_factor" \
   "dataloader_persistent_workers=$dataloader_persistent_workers" \
   "dataloader_pin_memory=$dataloader_pin_memory" \
+  "loader_selection_mode=$loader_selection_mode" \
+  "loader_smoke_sha256=$loader_smoke_sha256" \
   "global_loader_selection_sha256=$(sha256sum "$node_provenance/global_loader_selection.json" | cut -d' ' -f1)" \
   "frozen_loader_selection_sha256=$(sha256sum "$node_provenance/frozen_loader_selection.json" | cut -d' ' -f1)" \
   >"$node_provenance/launcher.env"

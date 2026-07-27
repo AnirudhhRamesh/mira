@@ -104,7 +104,9 @@ def test_dino_metrics_public_v2_loading(monkeypatch) -> None:
     assert model.patch_size == 14
     assert calls == [
         {
-            "repo_or_dir": "facebookresearch/dinov2",
+            "repo_or_dir": (
+                "facebookresearch/dinov2:7764ea0f912e53c92e82eb78a2a1631e92725fc8"
+            ),
             "model": "dinov2_vitb14",
             "source": "github",
             "verbose": False,

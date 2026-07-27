@@ -179,8 +179,6 @@ class Auditor:
 
         loader_path = node / "frozen_loader_selection.json"
         loader = _read_json(loader_path)
-        benchmark_inputs = loader.get("benchmark_inputs", [])
-        host_repeat_counts = loader.get("benchmark_host_repeat_counts", {})
         self.require("node_0.loader_status", loader.get("status") == "pass", loader.get("status"))
         self.require(
             "node_0.loader_commit",
@@ -193,24 +191,6 @@ class Auditor:
             loader.get("expected_gpu_substring"),
         )
         self.require(
-            "node_0.loader_hostname",
-            loader.get("expected_hostname") == hostname
-            and len(benchmark_inputs) >= 3
-            and host_repeat_counts == {hostname: len(benchmark_inputs)}
-            and all(item.get("hostname") == hostname for item in benchmark_inputs),
-            {
-                "expected_hostname": loader.get("expected_hostname"),
-                "host_repeat_counts": host_repeat_counts,
-                "benchmark_input_count": len(benchmark_inputs),
-            },
-        )
-        self.require(
-            "node_0.loader_manifest",
-            loader.get("expected_manifest_sha256") == EXPECTED_MANIFEST_SHA256
-            and all(item.get("manifest_sha256") == EXPECTED_MANIFEST_SHA256 for item in benchmark_inputs),
-            loader.get("expected_manifest_sha256"),
-        )
-        self.require(
             "node_0.loader_selection_hash",
             launcher["frozen_loader_selection_sha256"] == _sha256(loader_path),
             {
@@ -219,7 +199,6 @@ class Auditor:
             },
         )
         selected_config = loader["selected_config"]
-
         global_loader_path = node / "global_loader_selection.json"
         global_loader = _read_json(global_loader_path)
         global_loader_hash = _sha256(global_loader_path)
@@ -235,34 +214,6 @@ class Auditor:
             },
         )
         self.require(
-            "node_0.global_loader_contract",
-            global_loader.get("schema") == "mira-cs2-frozen-loader-selection-v1"
-            and global_loader.get("status") == "pass"
-            and global_loader.get("expected_git_commit") == commit
-            and global_loader.get("expected_manifest_sha256") == EXPECTED_MANIFEST_SHA256
-            and global_loader.get("expected_hostname") is None,
-            {
-                "schema": global_loader.get("schema"),
-                "status": global_loader.get("status"),
-                "commit": global_loader.get("expected_git_commit"),
-                "manifest": global_loader.get("expected_manifest_sha256"),
-                "hostname": global_loader.get("expected_hostname"),
-            },
-        )
-        self.require(
-            "node_0.global_loader_host",
-            len(global_host_counts) == 1
-            and global_host_counts.get(hostname, 0) >= 3
-            and len(global_inputs) == global_host_counts.get(hostname)
-            and all(item.get("hostname") == hostname for item in global_inputs)
-            and all(item.get("manifest_sha256") == EXPECTED_MANIFEST_SHA256 for item in global_inputs),
-            {
-                "host_repeat_counts": global_host_counts,
-                "benchmark_input_count": len(global_inputs),
-                "allocated_hostname": hostname,
-            },
-        )
-        self.require(
             "node_0.global_loader_selected_config",
             global_loader.get("selected_config") == selected_config,
             {
@@ -270,6 +221,121 @@ class Auditor:
                 "local": selected_config,
             },
         )
+        loader_mode = launcher.get("loader_selection_mode", "measured")
+        loader_schema = loader.get("schema", "mira-cs2-frozen-loader-selection-v1")
+        if loader_schema == "mira-cs2-frozen-loader-selection-v1":
+            benchmark_inputs = loader.get("benchmark_inputs", [])
+            host_repeat_counts = loader.get("benchmark_host_repeat_counts", {})
+            self.require("node_0.loader_mode", loader_mode == "measured", loader_mode)
+            self.require(
+                "node_0.loader_hostname",
+                loader.get("expected_hostname") == hostname
+                and len(benchmark_inputs) >= 3
+                and host_repeat_counts == {hostname: len(benchmark_inputs)}
+                and all(item.get("hostname") == hostname for item in benchmark_inputs),
+                {
+                    "expected_hostname": loader.get("expected_hostname"),
+                    "host_repeat_counts": host_repeat_counts,
+                    "benchmark_input_count": len(benchmark_inputs),
+                },
+            )
+            self.require(
+                "node_0.loader_manifest",
+                loader.get("expected_manifest_sha256") == EXPECTED_MANIFEST_SHA256
+                and all(
+                    item.get("manifest_sha256") == EXPECTED_MANIFEST_SHA256
+                    for item in benchmark_inputs
+                ),
+                loader.get("expected_manifest_sha256"),
+            )
+            self.require(
+                "node_0.global_loader_contract",
+                global_loader.get("schema") == "mira-cs2-frozen-loader-selection-v1"
+                and global_loader.get("status") == "pass"
+                and global_loader.get("expected_git_commit") == commit
+                and global_loader.get("expected_manifest_sha256") == EXPECTED_MANIFEST_SHA256
+                and global_loader.get("expected_hostname") is None,
+                {
+                    "schema": global_loader.get("schema"),
+                    "status": global_loader.get("status"),
+                    "commit": global_loader.get("expected_git_commit"),
+                    "manifest": global_loader.get("expected_manifest_sha256"),
+                    "hostname": global_loader.get("expected_hostname"),
+                },
+            )
+            self.require(
+                "node_0.global_loader_host",
+                len(global_host_counts) == 1
+                and global_host_counts.get(hostname, 0) >= 3
+                and len(global_inputs) == global_host_counts.get(hostname)
+                and all(item.get("hostname") == hostname for item in global_inputs)
+                and all(
+                    item.get("manifest_sha256") == EXPECTED_MANIFEST_SHA256
+                    for item in global_inputs
+                ),
+                {
+                    "host_repeat_counts": global_host_counts,
+                    "benchmark_input_count": len(global_inputs),
+                    "allocated_hostname": hostname,
+                },
+            )
+        elif loader_schema == "mira-cs2-reused-loader-selection-v1":
+            source = loader.get("source_selection", {})
+            smoke_record = loader.get("current_node_smoke", {})
+            smoke_path = node / "loader_smoke.json"
+            smoke = _read_json(smoke_path)
+            smoke_hash = _sha256(smoke_path)
+            smoke_provenance = smoke.get("provenance", {})
+            smoke_results = smoke.get("results", [])
+            self.require("node_0.loader_mode", loader_mode == "reused", loader_mode)
+            self.require(
+                "node_0.reused_loader_source",
+                global_loader.get("schema") == "mira-cs2-frozen-loader-selection-v1"
+                and global_loader.get("status") == "pass"
+                and global_loader.get("expected_manifest_sha256") == EXPECTED_MANIFEST_SHA256
+                and global_loader.get("expected_gpu_substring") == "GH200"
+                and source.get("sha256") == global_loader_hash
+                and source.get("git_commit") == global_loader.get("expected_git_commit")
+                and source.get("benchmark_host_repeat_counts") == global_host_counts
+                and source.get("benchmark_input_count") == len(global_inputs)
+                and len(global_inputs) >= 3
+                and all(int(count) >= 3 for count in global_host_counts.values())
+                and all(
+                    item.get("manifest_sha256") == EXPECTED_MANIFEST_SHA256
+                    for item in global_inputs
+                ),
+                {
+                    "source": source,
+                    "global_commit": global_loader.get("expected_git_commit"),
+                    "global_hash": global_loader_hash,
+                },
+            )
+            self.require(
+                "node_0.reused_loader_smoke",
+                smoke.get("schema") == "mira-cs2-dataloader-benchmark-v1"
+                and smoke.get("status") == "pass"
+                and smoke_provenance.get("git_clean") is True
+                and smoke_provenance.get("git_commit") == commit
+                and smoke_provenance.get("hostname") == hostname
+                and smoke_provenance.get("manifest_sha256") == EXPECTED_MANIFEST_SHA256
+                and "gh200" in str(smoke_provenance.get("gpu", "")).lower()
+                and {item.get("group_mode") for item in smoke_results}
+                == {"synchronized", "shuffled"}
+                and all(item.get("status") == "pass" for item in smoke_results)
+                and smoke_record.get("sha256") == smoke_hash
+                and launcher.get("loader_smoke_sha256") == smoke_hash,
+                {
+                    "record": smoke_record,
+                    "actual_hash": smoke_hash,
+                    "provenance": smoke_provenance,
+                },
+            )
+        else:
+            self.require(
+                "node_0.loader_schema",
+                False,
+                loader.get("schema"),
+            )
         self.require(
             "node_0.global_loader_selection_rule",
             global_selection_evidence.get("rule") == GLOBAL_LOADER_SELECTION_RULE
