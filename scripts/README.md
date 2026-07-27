@@ -52,11 +52,13 @@ Hydra applications for training, evaluation, and serving. Each reads its config 
   SHA-256, and all four extracted file hashes against
   `configs/frozen_dust2_endpoints_v1.json`, and refuses conflicting destinations.
 - `run_cs2_frozen_event_probe_slurm_seed.sh` — dependent one-GPU event job for one passing
-  fixed-update child audit, with explicit common-step checkpoints and frozen single-MIRA hash.
+  fixed-update child audit, with explicit common-step checkpoints, frozen single-MIRA hash, and a
+  job-private prepared Torch Hub cache.
 - `prepare_and_submit_cs2_clariden_event_recovery.sh` — event-only Clariden recovery after
   successful checkpoint-only evaluation. It archives failed partial event roots, reuses all
-  training/evaluation artifacts, submits three fresh event jobs, and runs only final aggregation
-  after all three pass. Its lower-level submitter is `submit_cs2_gh200_event_recovery.sh`.
+  training/evaluation and completed event artifacts, optionally retries only
+  `CS1K_EVENT_RECOVERY_SEEDS`, and runs final aggregation after the selected retries pass. Its
+  lower-level submitter is `submit_cs2_gh200_event_recovery.sh`.
 - `run_cs2_gh200_sweep_finalize.sh` — dependent fail-closed aggregation job; writes
   `sweep_summary.json` and `event_probe_sweep_summary.json` only after all child jobs pass.
 - `render_cs2_rebuttal_report.py` — render deterministic Markdown tables only after the complete

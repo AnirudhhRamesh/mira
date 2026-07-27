@@ -155,6 +155,8 @@ def test_dependent_event_job_uses_exact_fixed_step_checkpoints() -> None:
     assert "mira-cs2-gh200-sync-control-audit-v3" in text
     assert "CS1K_EXPECTED_SINGLE_CHECKPOINT_SHA256" in text
     assert "CS1K_EXPECTED_CODEC_CHECKPOINT_SHA256" in text
+    assert 'export TORCH_HOME="$torch_home_root/event_$SLURM_JOB_ID"' in text
+    assert "prepare_dinov2_cache.py" in text
     assert '--codec-checkpoint "$codec_checkpoint"' in event
 
 
@@ -167,6 +169,8 @@ def test_event_only_recovery_reuses_evaluation_and_archives_failed_roots() -> No
     assert "synchronized_test_seed_sweep/summary.json" in submit
     assert "synchronized_test_action_loss_seed_sweep/summary.json" in submit
     assert "synchronized_test_first_death_action_loss_seed_sweep/summary.json" in submit
+    assert "CS1K_EVENT_RECOVERY_SEEDS" in submit
+    assert "CS1K_EVENT_RECOVERY_MANIFEST" in submit
     assert 'mv "$output_root/seed_$seed/event_probe" "$archive_path"' in submit
     assert "event_recovery_manifest.json" in submit
     assert "run_cs2_frozen_event_probe_slurm_seed.sh" in submit
@@ -267,7 +271,7 @@ def _initialize_clean_repo(path: Path) -> None:
     )
 
 
-def test_event_only_recovery_submits_three_events_and_one_finalizer(tmp_path: Path) -> None:
+def _event_recovery_fixture(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     project = tmp_path / "mira"
     release = tmp_path / "release"
     fake_bin = tmp_path / "bin"
@@ -363,6 +367,11 @@ printf '%s  %s\n' "$digest" "$1"
         "CS1K_GH200_PARTITION": "test-gh200",
         "CS1K_EVENT_RECOVERY_TAG": "test-recovery",
     }
+    return output_root, sbatch_log, env
+
+
+def test_event_only_recovery_submits_three_events_and_one_finalizer(tmp_path: Path) -> None:
+    output_root, sbatch_log, env = _event_recovery_fixture(tmp_path)
     subprocess.run(
         ["bash", str(ROOT / "scripts" / "submit_cs2_gh200_event_recovery.sh")],
         cwd=ROOT,
@@ -382,12 +391,56 @@ printf '%s  %s\n' "$digest" "$1"
         assert (seed_root / "event_probe_failed_test-recovery").is_dir()
 
     manifest = json.loads((output_root / "event_recovery_manifest.json").read_text(encoding="utf-8"))
-    assert manifest["schema"] == "mira-cs2-event-recovery-submission-v1"
+    assert manifest["schema"] == "mira-cs2-event-recovery-submission-v2"
     assert manifest["training_reused"] is True
     assert manifest["evaluation_reused"] is True
     assert manifest["codec_path_relocated"] is True
+    assert manifest["recovery_seeds"] == [28, 29, 30]
     assert manifest["event_jobs"] == [1001, 1002, 1003]
     assert manifest["finalize_job"] == 1004
+
+
+def test_event_only_recovery_retries_failed_subset_and_reuses_complete_seed(
+    tmp_path: Path,
+) -> None:
+    output_root, sbatch_log, env = _event_recovery_fixture(tmp_path)
+    seed_28_event_root = output_root / "seed_28" / "event_probe"
+    (seed_28_event_root / "status.tsv").write_text(
+        "2026-07-27T17:00:00Z\tpipeline\tcomplete\n",
+        encoding="utf-8",
+    )
+    retry_manifest = output_root / "event_recovery_manifest_retry.json"
+    env.update(
+        {
+            "CS1K_EVENT_RECOVERY_SEEDS": "29 30",
+            "CS1K_EVENT_RECOVERY_TAG": "retry",
+            "CS1K_EVENT_RECOVERY_MANIFEST": str(retry_manifest),
+        }
+    )
+
+    subprocess.run(
+        ["bash", str(ROOT / "scripts" / "submit_cs2_gh200_event_recovery.sh")],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    calls = sbatch_log.read_text(encoding="utf-8").splitlines()
+    assert len(calls) == 3
+    assert "CS1K_SEED=29" in calls[0]
+    assert "CS1K_SEED=30" in calls[1]
+    assert "afterok:1001:1002" in calls[2]
+    assert seed_28_event_root.is_dir()
+    assert (output_root / "seed_29" / "event_probe_failed_retry").is_dir()
+    assert (output_root / "seed_30" / "event_probe_failed_retry").is_dir()
+
+    manifest = json.loads(retry_manifest.read_text(encoding="utf-8"))
+    assert manifest["schema"] == "mira-cs2-event-recovery-submission-v2"
+    assert manifest["recovery_seeds"] == [29, 30]
+    assert manifest["event_jobs"] == [1001, 1002]
+    assert manifest["finalize_job"] == 1003
 
 
 def test_complete_sweep_submitter_submits_three_seed_dependency_dag(tmp_path: Path) -> None:

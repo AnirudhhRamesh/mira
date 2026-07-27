@@ -84,6 +84,16 @@ if int(audit.get("train_steps", -1)) != expected_steps:
     raise SystemExit("Child audit update budget does not match the requested budget")
 PY
 
+# Torch Hub removes and re-extracts the pinned repository while resolving a GitHub revision.
+# Concurrent event jobs must therefore never share the mutable per-user cache. Warm one
+# job-private cache before the three sequential feature-extraction processes consume it.
+torch_home_root=${CS1K_TORCH_HOME_ROOT:-$output_root/torch_hub}
+export TORCH_HOME="$torch_home_root/event_$SLURM_JOB_ID"
+mkdir -p "$TORCH_HOME"
+PYTHONPATH="$project_dir/src" "$python_bin" "$project_dir/scripts/prepare_dinov2_cache.py" \
+  --torch-home "$TORCH_HOME" \
+  --output "$TORCH_HOME/dinov2_cache_ready.json"
+
 export CS1K_CONTROL_ROOT="$control_root"
 export CS1K_SYNCHRONIZED_CHECKPOINT="$synchronized_checkpoint"
 # The historical internal key is "shuffled"; this checkpoint is the cross-round-grouped arm.
