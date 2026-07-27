@@ -157,7 +157,8 @@ parse_job_id() {
   printf '%s\n' "$job_id"
 }
 
-mkdir -p "$output_root"
+log_root=$output_root/logs
+mkdir -p "$log_root"
 training_job_ids=()
 event_job_ids=()
 for seed in "${training_seeds[@]}"; do
@@ -172,6 +173,8 @@ for seed in "${training_seeds[@]}"; do
     --cpus-per-task=288 \
     --exclusive \
     --hint=nomultithread \
+    --chdir="$output_root" \
+    --output="$log_root/training-seed-$seed-%j.log" \
     --time="$training_time" \
     --export=ALL,CS1K_SEED="$seed" \
     "${training_extra_args[@]}" \
@@ -190,6 +193,8 @@ for index in "${!training_seeds[@]}"; do
     --nodes=1 \
     --ntasks=1 \
     --gpus-per-node=1 \
+    --chdir="$output_root" \
+    --output="$log_root/event-seed-$seed-%j.log" \
     --time="$event_time" \
     --dependency="afterok:$training_job_id" \
     --export=ALL,CS1K_SEED="$seed" \
@@ -207,6 +212,8 @@ raw_finalize_job_id=$(sbatch \
   --nodes=1 \
   --ntasks=1 \
   --gpus-per-node=1 \
+  --chdir="$output_root" \
+  --output="$log_root/finalize-%j.log" \
   --time="$finalize_time" \
   --dependency="afterok:$event_dependency" \
   --export=ALL \
@@ -268,6 +275,7 @@ payload = {
         "training_jobs": dict(zip(map(str, seeds), training_jobs, strict=True)),
         "event_jobs": dict(zip(map(str, seeds), event_jobs, strict=True)),
         "finalize_job": finalize_job_id,
+        "log_root": str(Path(output).parent / "logs"),
     },
     "contract": {
         "training_seeds": seeds,

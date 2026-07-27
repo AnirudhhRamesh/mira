@@ -298,6 +298,8 @@ printf '%s  %s\n' "$digest" "$1"
     assert all("--nodes=1" in call for call in calls[:3])
     assert all("--gpus-per-node=4" in call for call in calls[:3])
     assert all("--nodes=4" not in call for call in calls[:3])
+    assert all(f"--chdir={output_root}" in call for call in calls)
+    assert all(f"--output={output_root}/logs/" in call for call in calls)
     assert [f"CS1K_SEED={seed}" in calls[index] for index, seed in enumerate((28, 29, 30))] == [
         True,
         True,
@@ -310,6 +312,7 @@ printf '%s  %s\n' "$digest" "$1"
 
     submission = json.loads((output_root / "submission_manifest.json").read_text(encoding="utf-8"))
     assert submission["schema"] == "mira-cs2-clariden-submission-v2"
+    assert submission["slurm"]["log_root"] == str(output_root / "logs")
     assert submission["contract"]["training_seeds"] == [28, 29, 30]
     assert submission["contract"]["training_topology"] == {
         "nodes_per_seed_job": 1,
