@@ -279,6 +279,7 @@ def _loader(
     split: str,
     map_slug: str,
     group_mode: GroupMode,
+    window_mode: Literal["midpoint", "first-death"] = "midpoint",
     clip_len: int,
     target_fps: int,
     frame_size: tuple[int, int],
@@ -298,6 +299,7 @@ def _loader(
         split=split,
         map_slug=map_slug,
         group_mode=group_mode,
+        window_mode=window_mode,
         clip_len=clip_len,
         target_fps=target_fps,
         n_players=n_players,
@@ -334,6 +336,10 @@ def verify_single_synchronized_parity(
     common = {
         "split": split,
         "map_slug": map_slug,
+        # A shared event anchor makes this a tensor-parity test rather than an invalid
+        # comparison between the single loader's POV-specific midpoint and the synchronized
+        # loader's common-alive-horizon midpoint.
+        "window_mode": "first-death",
         "clip_len": clip_len,
         "target_fps": target_fps,
         "frame_size": frame_size,
@@ -373,6 +379,7 @@ def verify_single_synchronized_parity(
         "round_id": single_meta[0].round_id,
         "sample_keys": [item.sample_key for item in single_meta],
         "source_start_frame": single_meta[0].source_start_frame,
+        "window_mode": single_meta[0].window_mode,
         "video_sha256": _tensor_sha256(single_batch.video),
         "key_presses_sha256": _tensor_sha256(single_batch.actions.key_presses),
         "mouse_movements_sha256": _tensor_sha256(single_batch.actions.mouse_movements),

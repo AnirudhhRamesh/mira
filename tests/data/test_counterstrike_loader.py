@@ -227,7 +227,8 @@ def test_single_synchronized_tensor_parity_gate(tmp_path, monkeypatch) -> None:
     assert result["status"] == "pass"
     assert len(result["sample_keys"]) == 10
     assert len(result["video_sha256"]) == 64
-    assert result["source_start_frame"] == 11
+    assert result["source_start_frame"] == 6
+    assert result["window_mode"] == "first-death"
 
 
 def test_benchmark_provenance_pins_explicit_manifest(tmp_path) -> None:
