@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Four-node GH200 synchronized-vs-cross-round-grouped matched-information ablation.
+# One-node, four-GH200 synchronized-vs-cross-round-grouped matched-information ablation.
 #
-# The publication path launches this script once per node through Slurm. Each arm uses the
+# The publication path launches this script once with all four local GH200s visible; torchrun
+# starts one DDP process per GPU. Each arm uses the
 # identical ten-player architecture, global batch, action/video volume, seed, GPU topology, and
 # optimizer-update budget; only whether the ten POVs come from the same synchronized round changes.
 # The wall-clock setting is a fail-closed safety cap, not the compute-matching variable.
@@ -32,9 +33,9 @@ else
 fi
 arm_order=${CS1K_ARM_ORDER:-$default_arm_order}
 
-nnodes=${NNODES:-4}
+nnodes=${NNODES:-1}
 node_rank=${NODE_RANK:-${SLURM_PROCID:-}}
-nproc_per_node=${NPROC_PER_NODE:-1}
+nproc_per_node=${NPROC_PER_NODE:-4}
 master_addr=${MASTER_ADDR:?Set MASTER_ADDR to the rank-0 hostname or IP}
 master_port=${MASTER_PORT:-29500}
 dataloader_workers=${CS1K_DATALOADER_WORKERS:?Freeze workers from the GH200 loader benchmark}
@@ -43,16 +44,16 @@ dataloader_persistent_workers=${CS1K_DATALOADER_PERSISTENT_WORKERS:?Freeze persi
 dataloader_pin_memory=${CS1K_DATALOADER_PIN_MEMORY:?Freeze pin-memory from the GH200 benchmark}
 loader_benchmark_root=${CS1K_LOADER_BENCHMARK_ROOT:-}
 loader_benchmark_jsons=${CS1K_LOADER_BENCHMARK_JSONS:-}
-global_loader_selection=${CS1K_GLOBAL_LOADER_SELECTION:?Set the four-node frozen loader selection}
+global_loader_selection=${CS1K_GLOBAL_LOADER_SELECTION:?Set the frozen loader selection}
 require_slurm=${CS1K_REQUIRE_SLURM:-true}
 node_hostname=$(hostname)
 
-if [[ "$nnodes" != 4 || "$nproc_per_node" != 1 ]]; then
-  echo "The preregistered GH200 topology is exactly four nodes with one process/GPU per node" >&2
+if [[ "$nnodes" != 1 || "$nproc_per_node" != 4 ]]; then
+  echo "The preregistered topology is one Clariden node with four local GH200 DDP processes" >&2
   exit 1
 fi
-if ! [[ "$node_rank" =~ ^[0-3]$ ]]; then
-  echo "NODE_RANK or SLURM_PROCID must be one of 0, 1, 2, or 3" >&2
+if [[ "$node_rank" != 0 ]]; then
+  echo "NODE_RANK must be 0 for the single-node launcher" >&2
   exit 1
 fi
 if [[ "$require_slurm" != true && "$require_slurm" != false ]]; then
@@ -65,12 +66,12 @@ if [[ "$require_slurm" == true ]]; then
   : "${SLURM_PROCID:?SLURM_PROCID is required}"
   : "${SLURM_NODEID:?SLURM_NODEID is required}"
   slurm_nodes=${SLURM_NNODES:-${SLURM_JOB_NUM_NODES:-}}
-  if [[ "$slurm_nodes" != 4 ]]; then
-    echo "Slurm allocation must contain exactly four nodes, found ${slurm_nodes:-unset}" >&2
+  if [[ "$slurm_nodes" != 1 ]]; then
+    echo "Slurm allocation must contain exactly one node, found ${slurm_nodes:-unset}" >&2
     exit 1
   fi
-  if [[ "$SLURM_PROCID" != "$node_rank" || "$SLURM_NODEID" != "$node_rank" ]]; then
-    echo "One task per node is required: rank=$node_rank procid=$SLURM_PROCID nodeid=$SLURM_NODEID" >&2
+  if [[ "$SLURM_PROCID" != 0 || "$SLURM_NODEID" != 0 || "${SLURM_LOCALID:-0}" != 0 ]]; then
+    echo "One four-GPU launcher task is required: procid=$SLURM_PROCID nodeid=$SLURM_NODEID localid=${SLURM_LOCALID:-unset}" >&2
     exit 1
   fi
 fi
@@ -108,20 +109,23 @@ if [[ ! -f "$split_provenance" ]]; then
   exit 1
 fi
 if [[ ! -f "$global_loader_selection" ]]; then
-  echo "Global four-node loader selection not found: $global_loader_selection" >&2
+  echo "Frozen loader selection not found: $global_loader_selection" >&2
   exit 1
 fi
 mapfile -t visible_gpu_names < <(
   nvidia-smi --query-gpu=name --format=csv,noheader | sed 's/[[:space:]]*$//'
 )
-if [[ ${#visible_gpu_names[@]} -ne 1 ]]; then
-  echo "Exactly one scheduler-visible GPU is required per node, found ${#visible_gpu_names[@]}" >&2
+if [[ ${#visible_gpu_names[@]} -ne 4 ]]; then
+  echo "Exactly four scheduler-visible GPUs are required, found ${#visible_gpu_names[@]}" >&2
   exit 1
 fi
-if [[ "${visible_gpu_names[0],,}" != *gh200* ]]; then
-  echo "Expected one GH200 per node, found ${visible_gpu_names[0]}" >&2
-  exit 1
-fi
+for gpu_name in "${visible_gpu_names[@]}"; do
+  if [[ "${gpu_name,,}" != *gh200* ]]; then
+    echo "Expected four GH200s, found ${visible_gpu_names[*]}" >&2
+    exit 1
+  fi
+done
+visible_gpu_names_joined=$(IFS='|'; printf '%s' "${visible_gpu_names[*]}")
 if [[ "$(dirname "$(realpath "$manifest_path")")" != "$(realpath "$dataset_dir")" ]]; then
   echo "CS1K_MANIFEST_PATH must live directly inside CS1K_DATASET_DIR" >&2
   exit 1
@@ -230,6 +234,7 @@ printf '%s\n' \
   "hostname=$node_hostname" \
   "visible_gpu_count=${#visible_gpu_names[@]}" \
   "visible_gpu_name=${visible_gpu_names[0]}" \
+  "visible_gpu_names=$visible_gpu_names_joined" \
   "master_addr=$master_addr" \
   "master_port=$master_port" \
   "scheduler=$([[ -n ${SLURM_JOB_ID:-} ]] && printf slurm || printf manual)" \
@@ -237,6 +242,9 @@ printf '%s\n' \
   "slurm_job_nodelist=${SLURM_JOB_NODELIST:-}" \
   "slurm_procid=${SLURM_PROCID:-}" \
   "slurm_nodeid=${SLURM_NODEID:-}" \
+  "slurm_localid=${SLURM_LOCALID:-}" \
+  "slurm_cpus_per_task=${SLURM_CPUS_PER_TASK:-}" \
+  "logical_cpus_visible=$(nproc)" \
   "manifest_path=$manifest_path" \
   "manifest_sha256=$(sha256sum "$manifest_path" | cut -d' ' -f1)" \
   "split_provenance=$split_provenance" \

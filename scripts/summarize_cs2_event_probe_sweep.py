@@ -114,7 +114,7 @@ def summarize(
     for seed_root in seed_roots:
         training_seed = int(seed_root.name.removeprefix("seed_"))
         audit = _read(seed_root / "audit.json")
-        if audit.get("schema") != "mira-cs2-gh200-sync-control-audit-v2":
+        if audit.get("schema") != "mira-cs2-gh200-sync-control-audit-v3":
             raise ValueError(f"{seed_root}: unexpected child audit schema")
         if audit.get("status") != "pass" or int(audit.get("seed", -1)) != training_seed:
             raise ValueError(f"{seed_root}: child training audit did not pass for its directory seed")

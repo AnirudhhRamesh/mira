@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Run repeated exact-contract loader benchmarks on one scheduler-visible GH200.
+# Run repeated exact-contract loader benchmarks on one representative GH200 of the allocated node.
 #
-# Invoke once per node (normally through srun with one task/GPU per node). Results are written to
-# BENCHMARK_ROOT/<hostname>/ so the training launcher can prove that every node uses its own three
-# independent repeats rather than copied evidence from another host.
+# Invoke once before the four-local-rank training step. Results are written to
+# BENCHMARK_ROOT/<hostname>/ so the launcher can prove that the selected configuration came from
+# three independent repeats on the exact Clariden node used for training.
 set -euo pipefail
 
 project_dir=${MIRA_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}

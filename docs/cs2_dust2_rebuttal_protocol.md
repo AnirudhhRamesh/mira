@@ -225,8 +225,8 @@ rounds?
 `group_mode=synchronized` and the historical internal name `group_mode=shuffled` use:
 
 - the same ten-player wrapper with `action_routing=spatial`, token/action counts, global batch,
-  codec, initialization seed, optimizer, four-node GH200 topology, and fixed optimizer-update
-  count;
+  codec, initialization seed, optimizer, one-node/four-GH200 DDP topology, and fixed
+  optimizer-update count;
 - the same amended, frozen splits and complete-round eligibility rule;
 - different training grouping only.
 
@@ -449,8 +449,8 @@ or copying from a live training volume.
 - Untouched confirmatory split: `scripts/prepare_cs2_confirmatory_split.py`
 - Isolated loader-benchmark staging: `scripts/stage_cs2_loader_benchmark_val.sh`
 - Exact-contract data-loader benchmark: `scripts/bench_cs2_dataloader.py`
-- Per-node GH200 loader preflight: `scripts/run_cs2_gh200_loader_preflight.sh`
-- Slurm-native four-node seed orchestration: `scripts/run_cs2_gh200_slurm_seed.sh`
+- Allocated-node GH200 loader preflight: `scripts/run_cs2_gh200_loader_preflight.sh`
+- Slurm-native one-node/four-GH200 seed orchestration: `scripts/run_cs2_gh200_slurm_seed.sh`
 - G7e pilot: `scripts/run_cs2_rebuttal_pipeline.sh`
 - Paired pilot evaluation: `scripts/run_cs2_rebuttal_eval.sh`
 - Action loss diagnostic: `scripts/run_cs2_action_loss_ablation.sh`

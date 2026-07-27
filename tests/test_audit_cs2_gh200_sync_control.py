@@ -71,7 +71,7 @@ def test_audit_dataset_accepts_frozen_disjoint_split(tmp_path: Path, monkeypatch
     assert auditor.checks["dataset.pilot_test.rounds"] == 52
 
 
-def test_audit_nodes_requires_identical_four_node_contract(tmp_path: Path, monkeypatch) -> None:
+def test_audit_nodes_requires_one_full_four_gh200_node(tmp_path: Path, monkeypatch) -> None:
     auditor = _auditor(tmp_path, monkeypatch)
     loader = {
         "status": "pass",
@@ -90,13 +90,15 @@ def test_audit_nodes_requires_identical_four_node_contract(tmp_path: Path, monke
         "train_steps": "10000",
         "arm_hours": "12.0",
         "arm_order": "synchronized,shuffled",
-        "nnodes": "4",
-        "nproc_per_node": "1",
+        "nnodes": "1",
+        "nproc_per_node": "4",
         "master_addr": "nid00000",
         "master_port": "29500",
         "scheduler": "slurm",
         "slurm_job_id": "12345",
-        "slurm_job_nodelist": "nid[00000-00003]",
+        "slurm_job_nodelist": "nid00000",
+        "slurm_cpus_per_task": "288",
+        "logical_cpus_visible": "288",
         "manifest_sha256": AUDIT.EXPECTED_MANIFEST_SHA256,
         "split_provenance_sha256": _sha256(auditor.split_provenance),
         "action_routing": "spatial",
@@ -105,17 +107,16 @@ def test_audit_nodes_requires_identical_four_node_contract(tmp_path: Path, monke
         "dataloader_persistent_workers": "true",
         "dataloader_pin_memory": "true",
     }
-    hostnames = [f"nid{rank:05d}" for rank in range(4)]
+    hostname = "nid00000"
     global_loader = loader | {
         "schema": "mira-cs2-frozen-loader-selection-v1",
         "expected_hostname": None,
-        "benchmark_host_repeat_counts": {hostname: 3 for hostname in hostnames},
+        "benchmark_host_repeat_counts": {hostname: 3},
         "benchmark_inputs": [
             {
                 "hostname": hostname,
                 "manifest_sha256": AUDIT.EXPECTED_MANIFEST_SHA256,
             }
-            for hostname in hostnames
             for _ in range(3)
         ],
         "selection_evidence": {
@@ -125,47 +126,52 @@ def test_audit_nodes_requires_identical_four_node_contract(tmp_path: Path, monke
     }
     global_loader_text = json.dumps(global_loader, sort_keys=True)
     global_loader_sha256 = hashlib.sha256(global_loader_text.encode()).hexdigest()
-    for rank in range(4):
-        hostname = hostnames[rank]
-        node = auditor.root / "provenance" / f"node_{rank}"
-        node.mkdir(parents=True)
-        (node / "code_commit.txt").write_text(COMMIT + "\n", encoding="utf-8")
-        (node / "code_status.txt").write_text("", encoding="utf-8")
-        (node / "code.patch").write_text("", encoding="utf-8")
-        (node / "nvidia_smi_q.txt").write_text("Product Name : NVIDIA GH200\n", encoding="utf-8")
-        (node / "gpu_timeseries.csv").write_text("header\nsample\n", encoding="utf-8")
-        node_launcher = launcher | {
-            "node_rank": str(rank),
-            "hostname": hostname,
-            "visible_gpu_count": "1",
-            "visible_gpu_name": "NVIDIA GH200 480GB",
-            "slurm_procid": str(rank),
-            "slurm_nodeid": str(rank),
-            "global_loader_selection_sha256": global_loader_sha256,
-        }
-        (node / "launcher.env").write_text(
-            "".join(f"{key}={value}\n" for key, value in node_launcher.items()),
-            encoding="utf-8",
-        )
-        node_loader = loader | {
-            "expected_hostname": hostname,
-            "benchmark_host_repeat_counts": {hostname: 3},
-            "benchmark_inputs": [
-                {
-                    "hostname": hostname,
-                    "manifest_sha256": AUDIT.EXPECTED_MANIFEST_SHA256,
-                }
-                for _ in range(3)
-            ],
-        }
-        (node / "frozen_loader_selection.json").write_text(
-            json.dumps(node_loader),
-            encoding="utf-8",
-        )
-        (node / "global_loader_selection.json").write_text(
-            global_loader_text,
-            encoding="utf-8",
-        )
+    node = auditor.root / "provenance" / "node_0"
+    node.mkdir(parents=True)
+    (node / "code_commit.txt").write_text(COMMIT + "\n", encoding="utf-8")
+    (node / "code_status.txt").write_text("", encoding="utf-8")
+    (node / "code.patch").write_text("", encoding="utf-8")
+    (node / "nvidia_smi_q.txt").write_text(
+        "Product Name : NVIDIA GH200\n" * 4,
+        encoding="utf-8",
+    )
+    (node / "gpu_timeseries.csv").write_text("header\nsample\n", encoding="utf-8")
+    node_loader = loader | {
+        "expected_hostname": hostname,
+        "benchmark_host_repeat_counts": {hostname: 3},
+        "benchmark_inputs": [
+            {
+                "hostname": hostname,
+                "manifest_sha256": AUDIT.EXPECTED_MANIFEST_SHA256,
+            }
+            for _ in range(3)
+        ],
+    }
+    node_loader_text = json.dumps(node_loader)
+    node_launcher = launcher | {
+        "node_rank": "0",
+        "hostname": hostname,
+        "visible_gpu_count": "4",
+        "visible_gpu_name": "NVIDIA GH200 480GB",
+        "visible_gpu_names": "|".join(["NVIDIA GH200 480GB"] * 4),
+        "slurm_procid": "0",
+        "slurm_nodeid": "0",
+        "slurm_localid": "0",
+        "global_loader_selection_sha256": global_loader_sha256,
+        "frozen_loader_selection_sha256": hashlib.sha256(node_loader_text.encode()).hexdigest(),
+    }
+    (node / "launcher.env").write_text(
+        "".join(f"{key}={value}\n" for key, value in node_launcher.items()),
+        encoding="utf-8",
+    )
+    (node / "frozen_loader_selection.json").write_text(
+        node_loader_text,
+        encoding="utf-8",
+    )
+    (node / "global_loader_selection.json").write_text(
+        global_loader_text,
+        encoding="utf-8",
+    )
 
     commit, selected, seed, order = auditor.audit_nodes()
 
@@ -178,26 +184,25 @@ def test_audit_nodes_requires_identical_four_node_contract(tmp_path: Path, monke
         "selected_config": global_loader["selected_config"] | {"num_workers": 12},
     }
     mismatched_text = json.dumps(mismatched_global, sort_keys=True)
-    node_3 = auditor.root / "provenance" / "node_3"
-    (node_3 / "global_loader_selection.json").write_text(mismatched_text)
-    node_3_launcher = (node_3 / "launcher.env").read_text()
-    node_3_launcher = node_3_launcher.replace(
+    (node / "global_loader_selection.json").write_text(mismatched_text)
+    node_launcher_text = (node / "launcher.env").read_text()
+    node_launcher_text = node_launcher_text.replace(
         f"global_loader_selection_sha256={global_loader_sha256}",
         f"global_loader_selection_sha256={hashlib.sha256(mismatched_text.encode()).hexdigest()}",
     )
-    (node_3 / "launcher.env").write_text(node_3_launcher)
-    with pytest.raises(ValueError, match="node_3.global_loader_selected_config"):
+    (node / "launcher.env").write_text(node_launcher_text)
+    with pytest.raises(ValueError, match="node_0.global_loader_selected_config"):
         auditor.audit_nodes()
 
-    (node_3 / "global_loader_selection.json").write_text(global_loader_text)
-    (node_3 / "launcher.env").write_text(
-        node_3_launcher.replace(
+    (node / "global_loader_selection.json").write_text(global_loader_text)
+    (node / "launcher.env").write_text(
+        node_launcher_text.replace(
             f"global_loader_selection_sha256={hashlib.sha256(mismatched_text.encode()).hexdigest()}",
             f"global_loader_selection_sha256={global_loader_sha256}",
         )
     )
-    (auditor.root / "provenance" / "node_3" / "gpu_timeseries.csv").write_text("header\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="node_3.telemetry"):
+    (node / "gpu_timeseries.csv").write_text("header\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="node_0.telemetry"):
         auditor.audit_nodes()
 
 

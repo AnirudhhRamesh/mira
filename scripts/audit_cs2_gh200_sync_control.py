@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed audit for one completed four-node Dust2 synchronized-vs-shuffled run."""
+"""Fail-closed audit for one completed full-node Dust2 synchronized-vs-shuffled run."""
 
 from __future__ import annotations
 
@@ -121,183 +121,163 @@ class Auditor:
         node_roots = sorted((self.root / "provenance").glob("node_*"))
         self.require(
             "topology.node_directories",
-            [path.name for path in node_roots] == [f"node_{rank}" for rank in range(4)],
+            [path.name for path in node_roots] == ["node_0"],
             [path.name for path in node_roots],
         )
-        commits: set[str] = set()
-        launchers: list[dict[str, str]] = []
-        loader_configs: list[dict[str, Any]] = []
-        global_loader_hashes: list[str] = []
-        hostnames: list[str] = []
-        for rank, node in enumerate(node_roots):
-            commit = (node / "code_commit.txt").read_text(encoding="utf-8").strip()
-            commits.add(commit)
-            self.require(
-                f"node_{rank}.clean_status",
-                (node / "code_status.txt").read_text(encoding="utf-8") == "",
-                (node / "code_status.txt").read_text(encoding="utf-8"),
-            )
-            self.require(
-                f"node_{rank}.clean_patch",
-                (node / "code.patch").stat().st_size == 0,
-                (node / "code.patch").stat().st_size,
-            )
-            gpu = (node / "nvidia_smi_q.txt").read_text(encoding="utf-8")
-            self.require(f"node_{rank}.gh200", "GH200" in gpu, gpu[:200])
-            telemetry = (node / "gpu_timeseries.csv").read_text(encoding="utf-8").splitlines()
-            self.require(f"node_{rank}.telemetry", len(telemetry) >= 2, len(telemetry))
-            launcher = _read_env(node / "launcher.env")
-            launchers.append(launcher)
-            hostname = launcher["hostname"]
-            hostnames.append(hostname)
-            self.require(
-                f"node_{rank}.rank_identity",
-                launcher["node_rank"] == launcher["slurm_procid"] == launcher["slurm_nodeid"] == str(rank),
-                {
-                    "node_rank": launcher["node_rank"],
-                    "slurm_procid": launcher["slurm_procid"],
-                    "slurm_nodeid": launcher["slurm_nodeid"],
-                },
-            )
-            self.require(
-                f"node_{rank}.scheduler",
-                launcher["scheduler"] == "slurm"
-                and bool(launcher["slurm_job_id"])
-                and bool(launcher["slurm_job_nodelist"]),
-                {
-                    "scheduler": launcher["scheduler"],
-                    "job_id": launcher["slurm_job_id"],
-                    "nodelist": launcher["slurm_job_nodelist"],
-                },
-            )
-            self.require(
-                f"node_{rank}.one_visible_gh200",
-                launcher["visible_gpu_count"] == "1" and "gh200" in launcher["visible_gpu_name"].lower(),
-                {
-                    "count": launcher["visible_gpu_count"],
-                    "name": launcher["visible_gpu_name"],
-                },
-            )
-            loader = _read_json(node / "frozen_loader_selection.json")
-            benchmark_inputs = loader.get("benchmark_inputs", [])
-            host_repeat_counts = loader.get("benchmark_host_repeat_counts", {})
-            self.require(f"node_{rank}.loader_status", loader.get("status") == "pass", loader.get("status"))
-            self.require(
-                f"node_{rank}.loader_commit",
-                loader.get("expected_git_commit") == commit,
-                loader.get("expected_git_commit"),
-            )
-            self.require(
-                f"node_{rank}.loader_gpu",
-                loader.get("expected_gpu_substring") == "GH200",
-                loader.get("expected_gpu_substring"),
-            )
-            self.require(
-                f"node_{rank}.loader_hostname",
-                loader.get("expected_hostname") == hostname
-                and len(benchmark_inputs) >= 3
-                and host_repeat_counts.get(hostname) == len(benchmark_inputs)
-                and all(item.get("hostname") == hostname for item in benchmark_inputs),
-                {
-                    "expected_hostname": loader.get("expected_hostname"),
-                    "host_repeat_counts": host_repeat_counts,
-                    "benchmark_input_count": len(benchmark_inputs),
-                },
-            )
-            self.require(
-                f"node_{rank}.loader_manifest",
-                loader.get("expected_manifest_sha256") == EXPECTED_MANIFEST_SHA256
-                and all(item.get("manifest_sha256") == EXPECTED_MANIFEST_SHA256 for item in benchmark_inputs),
-                loader.get("expected_manifest_sha256"),
-            )
-            selected_config = loader["selected_config"]
-            loader_configs.append(selected_config)
-
-            global_loader_path = node / "global_loader_selection.json"
-            global_loader = _read_json(global_loader_path)
-            global_loader_hash = _sha256(global_loader_path)
-            global_loader_hashes.append(global_loader_hash)
-            global_host_counts = global_loader.get("benchmark_host_repeat_counts", {})
-            global_inputs = global_loader.get("benchmark_inputs", [])
-            global_selection_evidence = global_loader.get("selection_evidence", {})
-            self.require(
-                f"node_{rank}.global_loader_selection_hash",
-                launcher["global_loader_selection_sha256"] == global_loader_hash,
-                {
-                    "launcher": launcher["global_loader_selection_sha256"],
-                    "actual": global_loader_hash,
-                },
-            )
-            self.require(
-                f"node_{rank}.global_loader_contract",
-                global_loader.get("schema") == "mira-cs2-frozen-loader-selection-v1"
-                and global_loader.get("status") == "pass"
-                and global_loader.get("expected_git_commit") == commit
-                and global_loader.get("expected_manifest_sha256") == EXPECTED_MANIFEST_SHA256
-                and global_loader.get("expected_hostname") is None,
-                {
-                    "schema": global_loader.get("schema"),
-                    "status": global_loader.get("status"),
-                    "commit": global_loader.get("expected_git_commit"),
-                    "manifest": global_loader.get("expected_manifest_sha256"),
-                    "hostname": global_loader.get("expected_hostname"),
-                },
-            )
-            self.require(
-                f"node_{rank}.global_loader_hosts",
-                len(global_host_counts) == 4
-                and set(hostnames).issubset(global_host_counts)
-                and all(count >= 3 for count in global_host_counts.values())
-                and len(global_inputs) == sum(global_host_counts.values())
-                and all(
-                    sum(item.get("hostname") == hostname for item in global_inputs) == count
-                    for hostname, count in global_host_counts.items()
-                )
-                and all(item.get("manifest_sha256") == EXPECTED_MANIFEST_SHA256 for item in global_inputs),
-                {
-                    "host_repeat_counts": global_host_counts,
-                    "benchmark_input_count": len(global_inputs),
-                },
-            )
-            self.require(
-                f"node_{rank}.global_loader_selected_config",
-                global_loader.get("selected_config") == selected_config,
-                {
-                    "global": global_loader.get("selected_config"),
-                    "local": selected_config,
-                },
-            )
-            self.require(
-                f"node_{rank}.global_loader_selection_rule",
-                global_selection_evidence.get("rule") == GLOBAL_LOADER_SELECTION_RULE
-                and global_selection_evidence.get("selected_num_workers")
-                == selected_config.get("num_workers"),
-                global_selection_evidence,
-            )
-
-        self.require("code.single_commit", len(commits) == 1, sorted(commits))
+        node = node_roots[0]
+        commit = (node / "code_commit.txt").read_text(encoding="utf-8").strip()
         self.require(
-            "topology.distinct_hostnames",
-            len(set(hostnames)) == 4,
-            hostnames,
+            "node_0.clean_status",
+            (node / "code_status.txt").read_text(encoding="utf-8") == "",
+            (node / "code_status.txt").read_text(encoding="utf-8"),
         )
         self.require(
-            "loader.identical_global_selection",
-            len(set(global_loader_hashes)) == 1,
-            global_loader_hashes,
+            "node_0.clean_patch",
+            (node / "code.patch").stat().st_size == 0,
+            (node / "code.patch").stat().st_size,
         )
+        gpu = (node / "nvidia_smi_q.txt").read_text(encoding="utf-8")
+        self.require("node_0.four_gh200_inventory", gpu.lower().count("gh200") >= 4, gpu[:500])
+        telemetry = (node / "gpu_timeseries.csv").read_text(encoding="utf-8").splitlines()
+        self.require("node_0.telemetry", len(telemetry) >= 2, len(telemetry))
+
+        launcher = _read_env(node / "launcher.env")
+        hostname = launcher["hostname"]
         self.require(
-            "loader.global_hosts_match_allocation",
-            set(_read_json(node_roots[0] / "global_loader_selection.json")["benchmark_host_repeat_counts"])
-            == set(hostnames),
+            "node_0.rank_identity",
+            launcher["node_rank"] == launcher["slurm_procid"] == launcher["slurm_nodeid"] == "0"
+            and launcher["slurm_localid"] == "0",
             {
-                "benchmarked": sorted(
-                    _read_json(node_roots[0] / "global_loader_selection.json")["benchmark_host_repeat_counts"]
-                ),
-                "allocated": sorted(hostnames),
+                "node_rank": launcher["node_rank"],
+                "slurm_procid": launcher["slurm_procid"],
+                "slurm_nodeid": launcher["slurm_nodeid"],
+                "slurm_localid": launcher["slurm_localid"],
             },
         )
-        commit = next(iter(commits))
+        self.require(
+            "node_0.scheduler",
+            launcher["scheduler"] == "slurm"
+            and bool(launcher["slurm_job_id"])
+            and bool(launcher["slurm_job_nodelist"]),
+            {
+                "scheduler": launcher["scheduler"],
+                "job_id": launcher["slurm_job_id"],
+                "nodelist": launcher["slurm_job_nodelist"],
+            },
+        )
+        visible_gpu_names = launcher["visible_gpu_names"].split("|")
+        self.require(
+            "node_0.four_visible_gh200s",
+            launcher["visible_gpu_count"] == "4"
+            and len(visible_gpu_names) == 4
+            and all("gh200" in name.lower() for name in visible_gpu_names),
+            {
+                "count": launcher["visible_gpu_count"],
+                "names": visible_gpu_names,
+            },
+        )
+
+        loader_path = node / "frozen_loader_selection.json"
+        loader = _read_json(loader_path)
+        benchmark_inputs = loader.get("benchmark_inputs", [])
+        host_repeat_counts = loader.get("benchmark_host_repeat_counts", {})
+        self.require("node_0.loader_status", loader.get("status") == "pass", loader.get("status"))
+        self.require(
+            "node_0.loader_commit",
+            loader.get("expected_git_commit") == commit,
+            loader.get("expected_git_commit"),
+        )
+        self.require(
+            "node_0.loader_gpu",
+            loader.get("expected_gpu_substring") == "GH200",
+            loader.get("expected_gpu_substring"),
+        )
+        self.require(
+            "node_0.loader_hostname",
+            loader.get("expected_hostname") == hostname
+            and len(benchmark_inputs) >= 3
+            and host_repeat_counts == {hostname: len(benchmark_inputs)}
+            and all(item.get("hostname") == hostname for item in benchmark_inputs),
+            {
+                "expected_hostname": loader.get("expected_hostname"),
+                "host_repeat_counts": host_repeat_counts,
+                "benchmark_input_count": len(benchmark_inputs),
+            },
+        )
+        self.require(
+            "node_0.loader_manifest",
+            loader.get("expected_manifest_sha256") == EXPECTED_MANIFEST_SHA256
+            and all(item.get("manifest_sha256") == EXPECTED_MANIFEST_SHA256 for item in benchmark_inputs),
+            loader.get("expected_manifest_sha256"),
+        )
+        self.require(
+            "node_0.loader_selection_hash",
+            launcher["frozen_loader_selection_sha256"] == _sha256(loader_path),
+            {
+                "launcher": launcher["frozen_loader_selection_sha256"],
+                "actual": _sha256(loader_path),
+            },
+        )
+        selected_config = loader["selected_config"]
+
+        global_loader_path = node / "global_loader_selection.json"
+        global_loader = _read_json(global_loader_path)
+        global_loader_hash = _sha256(global_loader_path)
+        global_host_counts = global_loader.get("benchmark_host_repeat_counts", {})
+        global_inputs = global_loader.get("benchmark_inputs", [])
+        global_selection_evidence = global_loader.get("selection_evidence", {})
+        self.require(
+            "node_0.global_loader_selection_hash",
+            launcher["global_loader_selection_sha256"] == global_loader_hash,
+            {
+                "launcher": launcher["global_loader_selection_sha256"],
+                "actual": global_loader_hash,
+            },
+        )
+        self.require(
+            "node_0.global_loader_contract",
+            global_loader.get("schema") == "mira-cs2-frozen-loader-selection-v1"
+            and global_loader.get("status") == "pass"
+            and global_loader.get("expected_git_commit") == commit
+            and global_loader.get("expected_manifest_sha256") == EXPECTED_MANIFEST_SHA256
+            and global_loader.get("expected_hostname") is None,
+            {
+                "schema": global_loader.get("schema"),
+                "status": global_loader.get("status"),
+                "commit": global_loader.get("expected_git_commit"),
+                "manifest": global_loader.get("expected_manifest_sha256"),
+                "hostname": global_loader.get("expected_hostname"),
+            },
+        )
+        self.require(
+            "node_0.global_loader_host",
+            len(global_host_counts) == 1
+            and global_host_counts.get(hostname, 0) >= 3
+            and len(global_inputs) == global_host_counts.get(hostname)
+            and all(item.get("hostname") == hostname for item in global_inputs)
+            and all(item.get("manifest_sha256") == EXPECTED_MANIFEST_SHA256 for item in global_inputs),
+            {
+                "host_repeat_counts": global_host_counts,
+                "benchmark_input_count": len(global_inputs),
+                "allocated_hostname": hostname,
+            },
+        )
+        self.require(
+            "node_0.global_loader_selected_config",
+            global_loader.get("selected_config") == selected_config,
+            {
+                "global": global_loader.get("selected_config"),
+                "local": selected_config,
+            },
+        )
+        self.require(
+            "node_0.global_loader_selection_rule",
+            global_selection_evidence.get("rule") == GLOBAL_LOADER_SELECTION_RULE
+            and global_selection_evidence.get("selected_num_workers")
+            == selected_config.get("num_workers"),
+            global_selection_evidence,
+        )
+
         if self.expected_training_commit is not None:
             self.require(
                 "code.expected_commit",
@@ -305,45 +285,20 @@ class Auditor:
                 {"expected": self.expected_training_commit, "observed": commit},
             )
         self.require(
-            "loader.same_selection_all_nodes",
-            all(config == loader_configs[0] for config in loader_configs),
-            loader_configs,
-        )
-        common_launcher_fields = (
-            "seed",
-            "train_steps",
-            "arm_hours",
-            "arm_order",
-            "nnodes",
-            "nproc_per_node",
-            "master_addr",
-            "master_port",
-            "scheduler",
-            "slurm_job_id",
-            "slurm_job_nodelist",
-            "manifest_sha256",
-            "split_provenance_sha256",
-            "action_routing",
-            "dataloader_workers",
-            "dataloader_prefetch_factor",
-            "dataloader_persistent_workers",
-            "dataloader_pin_memory",
-            "global_loader_selection_sha256",
-        )
-        self.require(
-            "launcher.same_contract_all_nodes",
-            all(
-                {key: launcher[key] for key in common_launcher_fields}
-                == {key: launchers[0][key] for key in common_launcher_fields}
-                for launcher in launchers
-            ),
-            [{key: launcher[key] for key in common_launcher_fields} for launcher in launchers],
-        )
-        launcher = launchers[0]
-        self.require(
-            "topology.four_by_one",
-            launcher["nnodes"] == "4" and launcher["nproc_per_node"] == "1",
+            "topology.one_by_four",
+            launcher["nnodes"] == "1"
+            and launcher["nproc_per_node"] == "4"
+            and int(launcher["nnodes"]) * int(launcher["nproc_per_node"]) == 4,
             [launcher["nnodes"], launcher["nproc_per_node"]],
+        )
+        self.require(
+            "topology.full_node_cpus",
+            launcher["slurm_cpus_per_task"] == "288"
+            and int(launcher["logical_cpus_visible"]) >= 288,
+            {
+                "slurm_cpus_per_task": launcher["slurm_cpus_per_task"],
+                "logical_cpus_visible": launcher["logical_cpus_visible"],
+            },
         )
         self.require(
             "launcher.train_steps",
@@ -372,7 +327,7 @@ class Auditor:
         )
         order = tuple(launcher["arm_order"].split(","))
         self.require("launcher.arm_order", len(order) == 2 and set(order) == set(ARMS), order)
-        return commit, loader_configs[0], int(launcher["seed"]), (order[0], order[1])
+        return commit, selected_config, int(launcher["seed"]), (order[0], order[1])
 
     def audit_status(self, order: tuple[str, str]) -> None:
         observed = [
@@ -753,7 +708,7 @@ class Auditor:
         checkpoints = self.audit_training(seed, loader)
         evaluation = self.audit_evaluation(commit, checkpoints)
         return {
-            "schema": "mira-cs2-gh200-sync-control-audit-v2",
+            "schema": "mira-cs2-gh200-sync-control-audit-v3",
             "status": "pass",
             "experiment_root": str(self.root.resolve()),
             "training_commit": commit,

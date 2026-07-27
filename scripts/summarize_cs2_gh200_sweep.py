@@ -91,7 +91,7 @@ def summarize(root: Path) -> dict[str, Any]:
     death_action_summaries: list[dict[str, Any]] = []
     for seed_root in seed_roots:
         audit = _read(seed_root / "audit.json")
-        if audit.get("schema") != "mira-cs2-gh200-sync-control-audit-v2":
+        if audit.get("schema") != "mira-cs2-gh200-sync-control-audit-v3":
             raise ValueError(f"{seed_root}: unexpected child audit schema")
         if audit.get("status") != "pass":
             raise ValueError(f"{seed_root}: child audit did not pass")
@@ -223,7 +223,7 @@ def summarize(root: Path) -> dict[str, Any]:
     )
 
     return {
-        "schema": "mira-cs2-gh200-sync-control-sweep-v2",
+        "schema": "mira-cs2-gh200-sync-control-sweep-v3",
         "status": "pass",
         "independent_unit": "training_seed",
         "training_seeds": training_seeds,

@@ -30,8 +30,9 @@ Hydra applications for training, evaluation, and serving. Each reads its config 
   audit, average repeated probe-head fits within each frozen model pair, and aggregate only across
   independent world-model training seeds.
 - `submit_cs2_gh200_sweep.sh` — from a Slurm login node, submit the complete three-seed
-  four-node-GH200 training, causal-event, and final aggregation dependency graph with one command.
-  This lower-level submitter assumes its runtime has already been prepared.
+  full-node training, causal-event, and final aggregation dependency graph with one command. Each
+  training seed uses all four GH200s on one Clariden node with four local DDP processes. This
+  lower-level submitter assumes its runtime has already been prepared.
 - `prepare_and_submit_cs2_clariden_sweep.sh` — preferred Clariden entry point. It layers the
   required packages over CSCS's pinned ARM64 `pytorch/v2.8.0:v1` uenv and then invokes the complete
   dependency submitter. Copy `clariden_sync_sweep.env.example` outside the checkout, fill the

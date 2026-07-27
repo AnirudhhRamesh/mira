@@ -32,7 +32,7 @@ def _write_seed(root: Path, seed: int, order: tuple[str, str], delta: float) -> 
     action_root.mkdir(parents=True)
     death_action_root.mkdir(parents=True)
     audit = {
-        "schema": "mira-cs2-gh200-sync-control-audit-v2",
+        "schema": "mira-cs2-gh200-sync-control-audit-v3",
         "status": "pass",
         "seed": seed,
         "training_commit": COMMIT,
@@ -95,6 +95,7 @@ def test_summarize_uses_training_seed_as_independent_unit(tmp_path: Path) -> Non
 
     result = SUMMARY.summarize(tmp_path)
 
+    assert result["schema"] == "mira-cs2-gh200-sync-control-sweep-v3"
     psnr = result["primary"]["metrics/psnr"]["training_seed_summary_of_eval_seed_means"]
     assert psnr["n_training_seeds"] == 3
     assert psnr["mean"] == 2.0

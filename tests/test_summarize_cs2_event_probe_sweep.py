@@ -40,7 +40,7 @@ def _write_seed(root: Path, training_seed: int, delta: float) -> None:
         "shuffled": f"{training_seed + 100:064x}",
     }
     audit = {
-        "schema": "mira-cs2-gh200-sync-control-audit-v2",
+        "schema": "mira-cs2-gh200-sync-control-audit-v3",
         "status": "pass",
         "seed": training_seed,
         "training_commit": TRAINING_COMMIT,

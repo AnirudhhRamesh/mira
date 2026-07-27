@@ -5,8 +5,8 @@
 #   bash scripts/submit_cs2_gh200_sweep.sh /path/to/clariden_sync_sweep.env
 #
 # This is a control-plane script: run it once on a Slurm login node. It submits three independent
-# four-node GH200 jobs, a one-GPU event-probe job after each successful child audit, and a final
-# fail-closed aggregation job after all three event probes succeed.
+# full-node jobs, each using all four GH200s on one Clariden node, a one-GPU event-probe job after
+# each successful child audit, and a final fail-closed aggregation job after all probes succeed.
 set -euo pipefail
 
 if [[ $# -gt 1 ]]; then
@@ -166,9 +166,12 @@ for seed in "${training_seeds[@]}"; do
     --account="$account" \
     --partition="$partition" \
     --job-name="mira-cs2-train-$seed" \
-    --nodes=4 \
+    --nodes=1 \
     --ntasks-per-node=1 \
-    --gpus-per-node=1 \
+    --gpus-per-node=4 \
+    --cpus-per-task=288 \
+    --exclusive \
+    --hint=nomultithread \
     --time="$training_time" \
     --export=ALL,CS1K_SEED="$seed" \
     "${training_extra_args[@]}" \
@@ -257,7 +260,7 @@ seeds = [int(value) for value in seed_text.split()]
 training_jobs = training_job_text.split()
 event_jobs = event_job_text.split()
 payload = {
-    "schema": "mira-cs2-clariden-submission-v1",
+    "schema": "mira-cs2-clariden-submission-v2",
     "status": "submitted",
     "slurm": {
         "account": account,
@@ -270,6 +273,13 @@ payload = {
         "training_seeds": seeds,
         "train_steps_per_arm": int(train_steps),
         "arm_hours_safety_cap": float(arm_hours),
+        "training_topology": {
+            "nodes_per_seed_job": 1,
+            "gh200s_per_node": 4,
+            "ddp_processes_per_node": 4,
+            "cpus_per_launcher_task": 288,
+            "world_size": 4,
+        },
         "mira_commit": mira_commit,
         "counterstrike_1k_commit": release_commit,
         "manifest_path": manifest_path,

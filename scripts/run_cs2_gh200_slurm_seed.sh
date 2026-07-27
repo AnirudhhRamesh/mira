@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Slurm-native orchestration for one audited four-node GH200 training seed.
+# Slurm-native orchestration for one audited full-node Clariden GH200 training seed.
 #
 # Submit this file with site-specific account/partition/time flags, for example:
-#   sbatch --nodes=4 --ntasks-per-node=1 --gpus-per-node=1 ... \
+#   sbatch --nodes=1 --ntasks-per-node=1 --gpus-per-node=4 ... \
 #     scripts/run_cs2_gh200_slurm_seed.sh
 #
 # Required CS1K_* paths, fixed optimizer-update count, and fail-closed wall-clock cap must be
-# exported with --export or by the batch environment. The script benchmarks every allocated node,
-# freezes one deterministic loader configuration across all 12+ repeats, trains both arms,
+# exported with --export or by the batch environment. The script benchmarks the allocated node,
+# freezes one deterministic loader configuration, trains both arms with four local DDP processes,
 # evaluates the untouched test, and audits.
 set -euo pipefail
 
@@ -28,11 +28,11 @@ expected_manifest_sha256=33abbb623072932431871a612620110c473d4b664c52010e5763c27
 expected_codec_sha256=${CS1K_EXPECTED_CODEC_CHECKPOINT_SHA256:-3c286c59b74cd141e72af69cde1a0a005142d8d2b472c789cdf2a39a140c4b7a}
 expected_mira_commit=${CS1K_EXPECTED_MIRA_COMMIT:-}
 
-: "${SLURM_JOB_ID:?Run through sbatch or inside a four-node Slurm allocation}"
+: "${SLURM_JOB_ID:?Run through sbatch or inside a one-node, four-GH200 Slurm allocation}"
 : "${SLURM_JOB_NODELIST:?SLURM_JOB_NODELIST is required}"
 slurm_nodes=${SLURM_NNODES:-${SLURM_JOB_NUM_NODES:-}}
-if [[ "$slurm_nodes" != 4 ]]; then
-  echo "The publication control requires exactly four Slurm nodes, found ${slurm_nodes:-unset}" >&2
+if [[ "$slurm_nodes" != 1 ]]; then
+  echo "The publication control requires exactly one Slurm node, found ${slurm_nodes:-unset}" >&2
   exit 1
 fi
 if ! [[ "$seed" =~ ^[0-9]+$ ]]; then
@@ -78,24 +78,32 @@ if [[ "$(sha256sum "$codec_checkpoint" | cut -d' ' -f1)" != "$expected_codec_sha
 fi
 
 mapfile -t allocated_hosts < <(scontrol show hostnames "$SLURM_JOB_NODELIST")
-if [[ ${#allocated_hosts[@]} -ne 4 ]]; then
-  echo "Expected four hostnames from Slurm, found ${allocated_hosts[*]:-none}" >&2
-  exit 1
-fi
-if [[ $(printf '%s\n' "${allocated_hosts[@]}" | sort -u | wc -l) -ne 4 ]]; then
-  echo "Slurm allocation did not resolve to four distinct hosts" >&2
+if [[ ${#allocated_hosts[@]} -ne 1 ]]; then
+  echo "Expected one hostname from Slurm, found ${allocated_hosts[*]:-none}" >&2
   exit 1
 fi
 master_addr=${allocated_hosts[0]}
 master_port=${MASTER_PORT:-29500}
 
-read -r -a srun_gpu_args <<<"${CS1K_SRUN_GPU_ARGS:---gpus-per-task=1}"
-common_srun=(
-  --nodes=4
-  --ntasks=4
+read -r -a single_gpu_args <<<"${CS1K_SRUN_SINGLE_GPU_ARGS:---gpus-per-task=1}"
+read -r -a training_gpu_args <<<"${CS1K_SRUN_TRAINING_GPU_ARGS:---gpus-per-task=4}"
+loader_srun=(
+  --nodes=1
+  --ntasks=1
   --ntasks-per-node=1
+  --cpus-per-task=72
+  --exclusive
   --kill-on-bad-exit=1
-  "${srun_gpu_args[@]}"
+  "${single_gpu_args[@]}"
+)
+training_srun=(
+  --nodes=1
+  --ntasks=1
+  --ntasks-per-node=1
+  --cpus-per-task=288
+  --exclusive
+  --kill-on-bad-exit=1
+  "${training_gpu_args[@]}"
 )
 
 benchmark_root=$output_root/loader_benchmarks/slurm_$SLURM_JOB_ID
@@ -116,12 +124,12 @@ export CS1K_DATALOADER_PERSISTENT_WORKERS="$persistent_workers"
 export CS1K_DATALOADER_PIN_MEMORY="$pin_memory"
 export CS1K_EXPECTED_MANIFEST_SHA256="$expected_manifest_sha256"
 
-srun "${common_srun[@]}" "$project_dir/scripts/run_cs2_gh200_loader_preflight.sh"
+srun "${loader_srun[@]}" "$project_dir/scripts/run_cs2_gh200_loader_preflight.sh"
 
 mapfile -d '' -t benchmark_paths < <(
   find "$benchmark_root" -mindepth 2 -maxdepth 2 -type f -name 'repeat_*.json' -print0 | sort -z
 )
-minimum_expected=$((4 * ${CS1K_LOADER_BENCHMARK_REPEATS:-3}))
+minimum_expected=${CS1K_LOADER_BENCHMARK_REPEATS:-3}
 if [[ ${#benchmark_paths[@]} -lt "$minimum_expected" ]]; then
   echo "Expected at least $minimum_expected node-local benchmark JSONs, found ${#benchmark_paths[@]}" >&2
   exit 1
@@ -134,7 +142,7 @@ fi
   --expected-git-commit "$(git rev-parse HEAD)" \
   --expected-gpu-substring GH200 \
   --expected-manifest-sha256 "$expected_manifest_sha256" \
-  --expected-host-count 4 \
+  --expected-host-count 1 \
   --minimum-repeats-per-hostname 3 \
   --output "$selection_path"
 
@@ -165,12 +173,13 @@ export CS1K_TRAIN_STEPS="$train_steps"
 export CS1K_ARM_HOURS="$arm_hours"
 export CS1K_SEED="$seed"
 export CS1K_REQUIRE_SLURM=true
-export NNODES=4
-export NPROC_PER_NODE=1
+export NNODES=1
+export NPROC_PER_NODE=4
+export NODE_RANK=0
 export MASTER_ADDR="$master_addr"
 export MASTER_PORT="$master_port"
 
-srun "${common_srun[@]}" "$project_dir/scripts/run_cs2_gh200_sync_control.sh"
+srun "${training_srun[@]}" "$project_dir/scripts/run_cs2_gh200_sync_control.sh"
 
 training_root=$output_root/seed_$seed
 export CS1K_TRAINING_ROOT="$training_root"
@@ -178,8 +187,9 @@ srun \
   --nodes=1 \
   --ntasks=1 \
   --ntasks-per-node=1 \
+  --cpus-per-task=72 \
   --exclusive \
-  "${srun_gpu_args[@]}" \
+  "${single_gpu_args[@]}" \
   "$project_dir/scripts/run_cs2_gh200_sync_control_eval.sh"
 
 test -s "$training_root/audit.json"

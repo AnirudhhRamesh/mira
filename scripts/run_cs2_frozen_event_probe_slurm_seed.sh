@@ -66,7 +66,7 @@ import sys
 audit = json.load(open(sys.argv[1], encoding="utf-8"))
 expected_seed = int(sys.argv[2])
 expected_steps = int(sys.argv[3])
-if audit.get("schema") != "mira-cs2-gh200-sync-control-audit-v2":
+if audit.get("schema") != "mira-cs2-gh200-sync-control-audit-v3":
     raise SystemExit("Unexpected child audit schema")
 if audit.get("status") != "pass":
     raise SystemExit("Child training audit did not pass")

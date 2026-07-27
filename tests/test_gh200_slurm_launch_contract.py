@@ -1,4 +1,4 @@
-"""Static and fail-closed checks for the four-node GH200 Slurm entrypoints."""
+"""Static and fail-closed checks for the full-node Clariden GH200 entrypoints."""
 
 from __future__ import annotations
 
@@ -65,13 +65,17 @@ def test_publication_launcher_rejects_non_slurm_invocation() -> None:
     assert "Slurm allocation" in result.stderr
 
 
-def test_slurm_orchestrator_requests_exact_four_by_one_topology() -> None:
+def test_slurm_orchestrator_requests_exact_one_node_four_gpu_topology() -> None:
     text = (ROOT / "scripts" / "run_cs2_gh200_slurm_seed.sh").read_text()
-    assert "--nodes=4" in text
-    assert "--ntasks=4" in text
+    assert "--nodes=1" in text
     assert "--ntasks-per-node=1" in text
+    assert "--gpus-per-task=4" in text
+    assert "--cpus-per-task=288" in text
+    assert "export NNODES=1" in text
+    assert "export NPROC_PER_NODE=4" in text
     assert "--num-workers auto" in text
-    assert "--expected-host-count 4" in text
+    assert "--expected-host-count 1" in text
+    assert "--nodes=4" not in text
     assert "run_cs2_gh200_sync_control_eval.sh" in text
     assert "CS1K_TRAIN_STEPS" in text
 
@@ -95,7 +99,11 @@ def test_g7e_preflight_uses_the_same_fixed_step_endpoint_contract() -> None:
 def test_complete_sweep_submitter_builds_fail_closed_dependency_dag() -> None:
     text = (ROOT / "scripts" / "submit_cs2_gh200_sweep.sh").read_text()
     assert 'CS1K_TRAINING_SEEDS:-"28 29 30"' in text
-    assert '--nodes=4' in text
+    assert '--nodes=1' in text
+    assert '--gpus-per-node=4' in text
+    assert '--cpus-per-task=288' in text
+    assert '--exclusive' in text
+    assert '--nodes=4' not in text
     assert '--dependency="afterok:$training_job_id"' in text
     assert '--dependency="afterok:$event_dependency"' in text
     assert "run_cs2_frozen_event_probe_slurm_seed.sh" in text
@@ -110,7 +118,7 @@ def test_dependent_event_job_uses_exact_fixed_step_checkpoints() -> None:
     assert "checkpoint_index=$((train_steps - 1))" in text
     assert "synchronized/checkpoint-$checkpoint_index/checkpoint.pth" in text
     assert "shuffled/checkpoint-$checkpoint_index/checkpoint.pth" in text
-    assert "mira-cs2-gh200-sync-control-audit-v2" in text
+    assert "mira-cs2-gh200-sync-control-audit-v3" in text
     assert "CS1K_EXPECTED_SINGLE_CHECKPOINT_SHA256" in text
 
 
@@ -287,6 +295,9 @@ printf '%s  %s\n' "$digest" "$1"
 
     calls = sbatch_log.read_text(encoding="utf-8").splitlines()
     assert len(calls) == 7
+    assert all("--nodes=1" in call for call in calls[:3])
+    assert all("--gpus-per-node=4" in call for call in calls[:3])
+    assert all("--nodes=4" not in call for call in calls[:3])
     assert [f"CS1K_SEED={seed}" in calls[index] for index, seed in enumerate((28, 29, 30))] == [
         True,
         True,
@@ -298,8 +309,15 @@ printf '%s  %s\n' "$digest" "$1"
     assert "afterok:1004:1005:1006" in calls[6]
 
     submission = json.loads((output_root / "submission_manifest.json").read_text(encoding="utf-8"))
-    assert submission["schema"] == "mira-cs2-clariden-submission-v1"
+    assert submission["schema"] == "mira-cs2-clariden-submission-v2"
     assert submission["contract"]["training_seeds"] == [28, 29, 30]
+    assert submission["contract"]["training_topology"] == {
+        "nodes_per_seed_job": 1,
+        "gh200s_per_node": 4,
+        "ddp_processes_per_node": 4,
+        "cpus_per_launcher_task": 288,
+        "world_size": 4,
+    }
     assert (
         submission["contract"]["codec_checkpoint_sha256"]
         == "3c286c59b74cd141e72af69cde1a0a005142d8d2b472c789cdf2a39a140c4b7a"
