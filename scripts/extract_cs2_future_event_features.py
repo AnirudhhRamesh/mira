@@ -101,6 +101,14 @@ def main() -> int:
     parser.add_argument("checkpoint")
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument(
+        "--codec-checkpoint",
+        type=Path,
+        help=(
+            "Optional immutable codec relocation. This replaces only the saved absolute codec path "
+            "while preserving the world-model checkpoint and weights."
+        ),
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--splits", nargs="+", default=["train", "val", "test"])
     parser.add_argument("--context-frames", type=int, default=8)
@@ -126,6 +134,8 @@ def main() -> int:
         raise FileExistsError(f"refusing to overwrite non-empty output directory: {args.out}")
     if not args.manifest.is_file():
         raise FileNotFoundError(args.manifest)
+    if args.codec_checkpoint is not None and not args.codec_checkpoint.is_file():
+        raise FileNotFoundError(args.codec_checkpoint)
     if args.manifest.resolve().parent != args.dataset_root.resolve():
         raise ValueError("--manifest must live directly inside --dataset-root")
     if args.context_frames <= 0 or args.future_frames <= 0:
@@ -139,7 +149,11 @@ def main() -> int:
     seed_everything(args.seed, deterministic=True)
     checkpoint = resolve_checkpoint(args.checkpoint).resolve()
     device = torch.device(args.device)
-    model, _ = load_world_model(checkpoint, device=device)
+    model, _ = load_world_model(
+        checkpoint,
+        device=device,
+        codec_checkpoint=args.codec_checkpoint,
+    )
     if not isinstance(model, (LatentWorldModel, MultiWrapperWorldModel)):
         raise TypeError(f"unsupported checkpoint model type: {type(model)!r}")
     swm = model.single_world_model if isinstance(model, MultiWrapperWorldModel) else model

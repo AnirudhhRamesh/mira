@@ -11,6 +11,7 @@ release_dir=${CS1K_RELEASE_DIR:?Set CS1K_RELEASE_DIR to the public CounterStrike
 dataset_dir=${CS1K_DATASET_DIR:?Set CS1K_DATASET_DIR}
 manifest_path=${CS1K_MANIFEST_PATH:?Set the frozen confirmatory manifest}
 single_checkpoint=${CS1K_SINGLE_CHECKPOINT:?Set the frozen single-MIRA checkpoint}
+codec_checkpoint=${CS1K_CODEC_CHECKPOINT:?Set the frozen codec checkpoint}
 control_root=${CS1K_CONTROL_ROOT:?Set the synchronized-vs-shuffled training root}
 output_root=${CS1K_EVENT_OUTPUT_ROOT:?Set a new event-probe output root}
 mira_python=${MIRA_PYTHON:-$mira_dir/.pixi/envs/default/bin/python}
@@ -45,7 +46,7 @@ if [[ -n "$expected_release_commit" ]] &&
   echo "CounterStrike-1K commit drifted after sweep submission" >&2
   exit 1
 fi
-for path in "$manifest_path" "$single_checkpoint"; do
+for path in "$manifest_path" "$single_checkpoint" "$codec_checkpoint"; do
   if [[ ! -f "$path" ]]; then
     echo "Required event-probe input is absent: $path" >&2
     exit 1
@@ -98,11 +99,13 @@ git -C "$release_dir" rev-parse HEAD >"$output_root/provenance/release_commit.tx
 git -C "$mira_dir" status --porcelain=v1 >"$output_root/provenance/mira_status.txt"
 git -C "$release_dir" status --porcelain=v1 >"$output_root/provenance/release_status.txt"
 printf '%s\n' \
+  "$codec_checkpoint" \
   "$single_checkpoint" \
   "$synchronized_checkpoint" \
   "$shuffled_checkpoint" \
   >"$output_root/provenance/checkpoints.txt"
 sha256sum \
+  "$codec_checkpoint" \
   "$single_checkpoint" \
   "$synchronized_checkpoint" \
   "$shuffled_checkpoint" \
@@ -135,6 +138,7 @@ for arm in single synchronized shuffled; do
     "$checkpoint" \
     --dataset-root "$dataset_dir" \
     --manifest "$manifest_path" \
+    --codec-checkpoint "$codec_checkpoint" \
     --out "$output_root/features/$arm" \
     --context-frames 8 \
     --future-frames 8 \

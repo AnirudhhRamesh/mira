@@ -10,8 +10,10 @@ python_bin=${MIRA_PYTHON:-$project_dir/.pixi/envs/default/bin/python}
 output_root=${CS1K_OUTPUT_ROOT:?Set the shared sweep output root}
 train_steps=${CS1K_TRAIN_STEPS:?Set the fixed optimizer-update count}
 single_checkpoint=${CS1K_SINGLE_CHECKPOINT:?Set the frozen single-MIRA checkpoint}
+codec_checkpoint=${CS1K_CODEC_CHECKPOINT:?Set the frozen codec checkpoint}
 seed=${CS1K_SEED:?Set the world-model training seed}
 expected_single_sha256=${CS1K_EXPECTED_SINGLE_CHECKPOINT_SHA256:-3dbd8f0e43dbe833a5f36370d75f6306c7aa036dfcd3edba767ab138232fa047}
+expected_codec_sha256=${CS1K_EXPECTED_CODEC_CHECKPOINT_SHA256:-3c286c59b74cd141e72af69cde1a0a005142d8d2b472c789cdf2a39a140c4b7a}
 
 : "${SLURM_JOB_ID:?Run this event probe through sbatch}"
 if ! [[ "$seed" =~ ^[0-9]+$ ]]; then
@@ -32,12 +34,18 @@ if [[ ! -x "$python_bin" ]]; then
   echo "MIRA Python is not executable: $python_bin" >&2
   exit 1
 fi
-if [[ ! -f "$single_checkpoint" ]]; then
-  echo "Single-MIRA checkpoint is absent: $single_checkpoint" >&2
-  exit 1
-fi
+for path in "$single_checkpoint" "$codec_checkpoint"; do
+  if [[ ! -f "$path" ]]; then
+    echo "Frozen event-probe input is absent: $path" >&2
+    exit 1
+  fi
+done
 if [[ "$(sha256sum "$single_checkpoint" | cut -d' ' -f1)" != "$expected_single_sha256" ]]; then
   echo "Single-MIRA checkpoint SHA-256 drifted" >&2
+  exit 1
+fi
+if [[ "$(sha256sum "$codec_checkpoint" | cut -d' ' -f1)" != "$expected_codec_sha256" ]]; then
+  echo "Codec checkpoint SHA-256 drifted" >&2
   exit 1
 fi
 

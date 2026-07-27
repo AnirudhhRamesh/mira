@@ -580,7 +580,12 @@ class LatentWorldModel(nn.Module):
 
     @classmethod
     def load_from_checkpoint(
-        cls, checkpoint_path: str | Path, device: str | torch.device | None = None, **kwargs
+        cls,
+        checkpoint_path: str | Path,
+        device: str | torch.device | None = None,
+        *,
+        codec_checkpoint: str | Path | None = None,
+        **kwargs,
     ) -> LatentWorldModel:
         from omegaconf import OmegaConf  # noqa: PLC0415 -- optional dep, used only here
 
@@ -594,9 +599,10 @@ class LatentWorldModel(nn.Module):
 
         # Load via OmegaConf (already a dependency) so the config's ${..} interpolations resolve.
         config_raw = OmegaConf.load(config_path)
-        config = LatentWorldModelConfig.model_validate(
-            _config_dict_from_yaml(config_raw.model.architecture.config)
-        )
+        config_dict = _config_dict_from_yaml(config_raw.model.architecture.config)
+        if codec_checkpoint is not None:
+            config_dict["codec_checkpoint"] = str(Path(codec_checkpoint).resolve())
+        config = LatentWorldModelConfig.model_validate(config_dict)
         model = cls(config)
         model.to(device)
 

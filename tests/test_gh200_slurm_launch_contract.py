@@ -148,11 +148,34 @@ def test_posttrain_recovery_reuses_checkpoints_without_training_or_preflight() -
 
 def test_dependent_event_job_uses_exact_fixed_step_checkpoints() -> None:
     text = (ROOT / "scripts" / "run_cs2_frozen_event_probe_slurm_seed.sh").read_text()
+    event = (ROOT / "scripts" / "run_cs2_frozen_event_probe.sh").read_text()
     assert "checkpoint_index=$((train_steps - 1))" in text
     assert "synchronized/checkpoint-$checkpoint_index/checkpoint.pth" in text
     assert "shuffled/checkpoint-$checkpoint_index/checkpoint.pth" in text
     assert "mira-cs2-gh200-sync-control-audit-v3" in text
     assert "CS1K_EXPECTED_SINGLE_CHECKPOINT_SHA256" in text
+    assert "CS1K_EXPECTED_CODEC_CHECKPOINT_SHA256" in text
+    assert '--codec-checkpoint "$codec_checkpoint"' in event
+
+
+def test_event_only_recovery_reuses_evaluation_and_archives_failed_roots() -> None:
+    submit = (ROOT / "scripts" / "submit_cs2_gh200_event_recovery.sh").read_text()
+    prepare = (
+        ROOT / "scripts" / "prepare_and_submit_cs2_clariden_event_recovery.sh"
+    ).read_text()
+
+    assert "synchronized_test_seed_sweep/summary.json" in submit
+    assert "synchronized_test_action_loss_seed_sweep/summary.json" in submit
+    assert "synchronized_test_first_death_action_loss_seed_sweep/summary.json" in submit
+    assert 'mv "$output_root/seed_$seed/event_probe" "$archive_path"' in submit
+    assert "event_recovery_manifest.json" in submit
+    assert "run_cs2_frozen_event_probe_slurm_seed.sh" in submit
+    assert "run_cs2_gh200_sweep_finalize.sh" in submit
+    assert '--dependency="afterok:$event_dependency"' in submit
+    assert "run_cs2_gh200_posttrain_eval_slurm_seed.sh" not in submit
+    assert "run_cs2_gh200_sync_control.sh" not in submit
+    assert "run_cs2_gh200_loader_preflight.sh" not in submit
+    assert "setup_cs2_clariden_uenv.sh" not in prepare
 
 
 def test_submitted_jobs_pin_source_commits_until_execution() -> None:
@@ -242,6 +265,129 @@ def _initialize_clean_repo(path: Path) -> None:
         cwd=path,
         check=True,
     )
+
+
+def test_event_only_recovery_submits_three_events_and_one_finalizer(tmp_path: Path) -> None:
+    project = tmp_path / "mira"
+    release = tmp_path / "release"
+    fake_bin = tmp_path / "bin"
+    _initialize_clean_repo(project)
+    _initialize_clean_repo(release)
+    fake_bin.mkdir()
+
+    codec = tmp_path / "codec.pth"
+    single = tmp_path / "single.pth"
+    codec.write_bytes(b"codec")
+    single.write_bytes(b"single")
+    output_root = tmp_path / "output"
+    for seed in (28, 29, 30):
+        seed_root = output_root / f"seed_{seed}"
+        (seed_root / "evaluation" / "synchronized_test_seed_sweep").mkdir(parents=True)
+        (seed_root / "evaluation" / "synchronized_test_action_loss_seed_sweep").mkdir()
+        (seed_root / "evaluation" / "synchronized_test_first_death_action_loss_seed_sweep").mkdir()
+        (seed_root / "audit.json").write_text(
+            json.dumps(
+                {
+                    "schema": "mira-cs2-gh200-sync-control-audit-v3",
+                    "status": "pass",
+                    "seed": seed,
+                    "train_steps": 10_000,
+                }
+            ),
+            encoding="utf-8",
+        )
+        for path in (
+            seed_root / "evaluation" / "synchronized_test_seed_sweep" / "summary.json",
+            seed_root / "evaluation" / "synchronized_test_action_loss_seed_sweep" / "summary.json",
+            seed_root
+            / "evaluation"
+            / "synchronized_test_first_death_action_loss_seed_sweep"
+            / "summary.json",
+        ):
+            path.write_text("{}\n", encoding="utf-8")
+        event_root = seed_root / "event_probe"
+        event_root.mkdir()
+        (event_root / "status.tsv").write_text(
+            "2026-07-27T09:00:00Z\tfeatures_single\trunning\n",
+            encoding="utf-8",
+        )
+
+    sbatch_log = tmp_path / "sbatch.log"
+    sbatch_counter = tmp_path / "sbatch.counter"
+    fake_sbatch = fake_bin / "sbatch"
+    fake_sbatch.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+counter=${FAKE_SBATCH_COUNTER:?}
+log=${FAKE_SBATCH_LOG:?}
+if [[ -f "$counter" ]]; then value=$(<"$counter"); else value=1000; fi
+value=$((value + 1))
+printf '%s\n' "$value" >"$counter"
+printf '%s\n' "$*" >>"$log"
+printf '%s\n' "$value"
+""",
+        encoding="utf-8",
+    )
+    fake_sbatch.chmod(0o755)
+    fake_sha256sum = fake_bin / "sha256sum"
+    fake_sha256sum.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  *codec.pth) digest=3c286c59b74cd141e72af69cde1a0a005142d8d2b472c789cdf2a39a140c4b7a ;;
+  *single.pth) digest=3dbd8f0e43dbe833a5f36370d75f6306c7aa036dfcd3edba767ab138232fa047 ;;
+  *) exit 2 ;;
+esac
+printf '%s  %s\n' "$digest" "$1"
+""",
+        encoding="utf-8",
+    )
+    fake_sha256sum.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_SBATCH_COUNTER": str(sbatch_counter),
+        "FAKE_SBATCH_LOG": str(sbatch_log),
+        "MIRA_PROJECT_DIR": str(project),
+        "MIRA_PYTHON": sys.executable,
+        "CS1K_SUBMIT_PYTHON": sys.executable,
+        "CS1K_RELEASE_DIR": str(release),
+        "CS1K_RELEASE_PYTHON": sys.executable,
+        "CS1K_OUTPUT_ROOT": str(output_root),
+        "CS1K_CODEC_CHECKPOINT": str(codec),
+        "CS1K_SINGLE_CHECKPOINT": str(single),
+        "CS1K_TRAIN_STEPS": "10000",
+        "CS1K_TRAINING_SEEDS": "28 29 30",
+        "CS1K_SLURM_ACCOUNT": "test-account",
+        "CS1K_GH200_PARTITION": "test-gh200",
+        "CS1K_EVENT_RECOVERY_TAG": "test-recovery",
+    }
+    subprocess.run(
+        ["bash", str(ROOT / "scripts" / "submit_cs2_gh200_event_recovery.sh")],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    calls = sbatch_log.read_text(encoding="utf-8").splitlines()
+    assert len(calls) == 4
+    assert all("--dependency=" not in call for call in calls[:3])
+    assert "afterok:1001:1002:1003" in calls[3]
+    for seed in (28, 29, 30):
+        seed_root = output_root / f"seed_{seed}"
+        assert not (seed_root / "event_probe").exists()
+        assert (seed_root / "event_probe_failed_test-recovery").is_dir()
+
+    manifest = json.loads((output_root / "event_recovery_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["schema"] == "mira-cs2-event-recovery-submission-v1"
+    assert manifest["training_reused"] is True
+    assert manifest["evaluation_reused"] is True
+    assert manifest["codec_path_relocated"] is True
+    assert manifest["event_jobs"] == [1001, 1002, 1003]
+    assert manifest["finalize_job"] == 1004
 
 
 def test_complete_sweep_submitter_submits_three_seed_dependency_dag(tmp_path: Path) -> None:
