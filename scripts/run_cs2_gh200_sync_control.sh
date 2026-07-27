@@ -77,7 +77,13 @@ if [[ "$require_slurm" == true ]]; then
 fi
 
 python_bin=${MIRA_PYTHON:-$project_dir/.pixi/envs/default/bin/python}
-torchrun_bin=${TORCHRUN_BIN:-$(dirname "$python_bin")/torchrun}
+if [[ -n ${TORCHRUN_BIN:-} ]]; then
+  torchrun_command=("$TORCHRUN_BIN")
+else
+  # Clariden's uenv exposes PyTorch through system site-packages, so the layered venv can import
+  # torch without owning a bin/torchrun console script.
+  torchrun_command=("$python_bin" -m torch.distributed.run)
+fi
 
 cd "$project_dir"
 export PYTHONPATH="$project_dir/src${PYTHONPATH:+:$PYTHONPATH}"
@@ -293,7 +299,7 @@ for arm in "${arms[@]}"; do
   write_status "$arm" running
   arm_started_epoch=$(date +%s)
   arm_started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  "$torchrun_bin" "${torchrun_args[@]}" scripts/train_world_model.py \
+  "${torchrun_command[@]}" "${torchrun_args[@]}" scripts/train_world_model.py \
     model=multi_wrapper_world_model_cs2_small \
     dataset=counterstrike1k_dust2 \
     dataset.train_index="$manifest_path" \

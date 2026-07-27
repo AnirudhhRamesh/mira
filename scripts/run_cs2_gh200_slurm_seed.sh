@@ -76,6 +76,7 @@ if [[ "$(sha256sum "$codec_checkpoint" | cut -d' ' -f1)" != "$expected_codec_sha
   echo "Codec checkpoint SHA-256 drifted" >&2
   exit 1
 fi
+"$python_bin" -c 'import torch; import torch.distributed.run'
 
 mapfile -t allocated_hosts < <(scontrol show hostnames "$SLURM_JOB_NODELIST")
 if [[ ${#allocated_hosts[@]} -ne 1 ]]; then

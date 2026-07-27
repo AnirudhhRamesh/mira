@@ -74,6 +74,7 @@ def test_slurm_orchestrator_requests_exact_one_node_four_gpu_topology() -> None:
     assert "--cpus-per-task=288" in text
     assert "export NNODES=1" in text
     assert "export NPROC_PER_NODE=4" in text
+    assert "import torch.distributed.run" in text
     assert "--num-workers auto" in text
     assert "--expected-host-count 1" in text
     assert "--nodes=4" not in text
@@ -85,6 +86,7 @@ def test_slurm_orchestrator_requests_exact_one_node_four_gpu_topology() -> None:
 
 def test_publication_launcher_uses_fixed_steps_and_external_hydra_output() -> None:
     text = (ROOT / "scripts" / "run_cs2_gh200_sync_control.sh").read_text()
+    assert 'torchrun_command=("$python_bin" -m torch.distributed.run)' in text
     assert 'run.steps="$train_steps"' in text
     assert "run.steps=100000000" not in text
     assert 'hydra.run.dir="$experiment_root/hydra/$arm/node_$node_rank"' in text
