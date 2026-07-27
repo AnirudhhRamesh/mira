@@ -25,6 +25,7 @@ def test_gh200_shell_entrypoints_parse() -> None:
         ROOT / "scripts" / "prepare_and_submit_cs2_clariden_sweep.sh",
         ROOT / "scripts" / "run_cs2_clariden_dataset_stage.sh",
         ROOT / "scripts" / "submit_cs2_clariden_dataset_stage.sh",
+        ROOT / "scripts" / "stage_cs2_frozen_endpoints.sh",
     ]
     subprocess.run(["bash", "-n", *map(str, scripts)], check=True)
 
@@ -169,6 +170,14 @@ def test_clariden_dataset_stage_is_pinned_and_fail_closed() -> None:
     assert "33abbb623072932431871a612620110c473d4b664c52010e5763c273c6daf10e" in worker
     assert "--job-name=mira-cs2-dataset-stage" in submit
     assert "dataset_stage_complete.json" in submit
+
+
+def test_frozen_endpoint_stager_pins_bundle_and_each_extracted_file() -> None:
+    text = (ROOT / "scripts" / "stage_cs2_frozen_endpoints.sh").read_text()
+    assert "198b53912948a53fd248f68cd7219d0526ab0965ab717eb59e18911c4a3664e2" in text
+    assert "3c286c59b74cd141e72af69cde1a0a005142d8d2b472c789cdf2a39a140c4b7a" in text
+    assert "3dbd8f0e43dbe833a5f36370d75f6306c7aa036dfcd3edba767ab138232fa047" in text
+    assert "Refusing to overwrite a conflicting destination" in text
 
 
 def _initialize_clean_repo(path: Path) -> None:
