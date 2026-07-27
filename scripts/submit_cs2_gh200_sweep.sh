@@ -43,6 +43,7 @@ event_time=${CS1K_EVENT_TIME:-04:00:00}
 finalize_time=${CS1K_FINALIZE_TIME:-00:30:00}
 training_seed_text=${CS1K_TRAINING_SEEDS:-"28 29 30"}
 expected_manifest_sha256=33abbb623072932431871a612620110c473d4b664c52010e5763c273c6daf10e
+expected_codec_sha256=${CS1K_EXPECTED_CODEC_CHECKPOINT_SHA256:-3c286c59b74cd141e72af69cde1a0a005142d8d2b472c789cdf2a39a140c4b7a}
 expected_single_sha256=${CS1K_EXPECTED_SINGLE_CHECKPOINT_SHA256:-3dbd8f0e43dbe833a5f36370d75f6306c7aa036dfcd3edba767ab138232fa047}
 
 for command_name in git sbatch sha256sum "$submit_python"; do
@@ -85,6 +86,10 @@ if [[ -n "$(git -C "$release_dir" status --porcelain=v1)" ]]; then
 fi
 if [[ "$(sha256sum "$manifest_path" | cut -d' ' -f1)" != "$expected_manifest_sha256" ]]; then
   echo "Confirmatory manifest SHA-256 drifted" >&2
+  exit 1
+fi
+if [[ "$(sha256sum "$codec_checkpoint" | cut -d' ' -f1)" != "$expected_codec_sha256" ]]; then
+  echo "Codec checkpoint SHA-256 drifted" >&2
   exit 1
 fi
 if [[ "$(sha256sum "$single_checkpoint" | cut -d' ' -f1)" != "$expected_single_sha256" ]]; then
@@ -132,6 +137,7 @@ export CS1K_ARM_HOURS="$arm_hours"
 export CS1K_EVENT_FEATURE_SEED=${CS1K_EVENT_FEATURE_SEED:-37}
 export CS1K_EVENT_PROBE_SEEDS=${CS1K_EVENT_PROBE_SEEDS:-"17 29 43"}
 export CS1K_EVENT_BOOTSTRAP_SAMPLES=${CS1K_EVENT_BOOTSTRAP_SAMPLES:-10000}
+export CS1K_EXPECTED_CODEC_CHECKPOINT_SHA256="$expected_codec_sha256"
 export CS1K_EXPECTED_SINGLE_CHECKPOINT_SHA256="$expected_single_sha256"
 export CS1K_EXPECTED_MIRA_COMMIT
 CS1K_EXPECTED_MIRA_COMMIT=$(git -C "$project_dir" rev-parse HEAD)
@@ -214,6 +220,8 @@ submission_manifest=$output_root/submission_manifest.json
   "$CS1K_EXPECTED_RELEASE_COMMIT" \
   "$manifest_path" \
   "$expected_manifest_sha256" \
+  "$codec_checkpoint" \
+  "$expected_codec_sha256" \
   "$single_checkpoint" \
   "$expected_single_sha256" \
   "$train_steps" \
@@ -234,6 +242,8 @@ from pathlib import Path
     release_commit,
     manifest_path,
     manifest_sha256,
+    codec_checkpoint,
+    codec_checkpoint_sha256,
     single_checkpoint,
     single_checkpoint_sha256,
     train_steps,
@@ -264,6 +274,8 @@ payload = {
         "counterstrike_1k_commit": release_commit,
         "manifest_path": manifest_path,
         "manifest_sha256": manifest_sha256,
+        "codec_checkpoint_path": codec_checkpoint,
+        "codec_checkpoint_sha256": codec_checkpoint_sha256,
         "single_checkpoint_path": single_checkpoint,
         "single_checkpoint_sha256": single_checkpoint_sha256,
         "final_results": ["sweep_summary.json", "event_probe_sweep_summary.json"],

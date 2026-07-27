@@ -12,6 +12,7 @@ dataset_dir=${CS1K_DATASET_DIR:?Set CS1K_DATASET_DIR on every node}
 manifest_path=${CS1K_MANIFEST_PATH:?Set the frozen confirmatory manifest path on every node}
 split_provenance=${CS1K_CONFIRMATORY_SPLIT_PROVENANCE:?Set the frozen split provenance on every node}
 codec_checkpoint=${CS1K_CODEC_CHECKPOINT:?Set CS1K_CODEC_CHECKPOINT on every node}
+expected_codec_sha256=${CS1K_EXPECTED_CODEC_CHECKPOINT_SHA256:-3c286c59b74cd141e72af69cde1a0a005142d8d2b472c789cdf2a39a140c4b7a}
 output_root=${CS1K_OUTPUT_ROOT:?Set CS1K_OUTPUT_ROOT to a shared result directory}
 train_steps=${CS1K_TRAIN_STEPS:?Set the identical optimizer-update count for both arms}
 arm_hours=${CS1K_ARM_HOURS:?Set the per-arm fail-closed wall-clock cap}
@@ -92,6 +93,10 @@ if [[ -n "$(git status --porcelain=v1)" ]]; then
 fi
 if [[ ! -f "$codec_checkpoint" ]]; then
   echo "Codec checkpoint not found: $codec_checkpoint" >&2
+  exit 1
+fi
+if [[ "$(sha256sum "$codec_checkpoint" | cut -d' ' -f1)" != "$expected_codec_sha256" ]]; then
+  echo "Codec checkpoint SHA-256 drifted on $node_hostname" >&2
   exit 1
 fi
 if [[ ! -f "$manifest_path" ]]; then

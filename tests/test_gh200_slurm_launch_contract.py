@@ -100,6 +100,8 @@ def test_complete_sweep_submitter_builds_fail_closed_dependency_dag() -> None:
     assert "run_cs2_frozen_event_probe_slurm_seed.sh" in text
     assert "run_cs2_gh200_sweep_finalize.sh" in text
     assert "submission_manifest.json" in text
+    assert "CS1K_EXPECTED_CODEC_CHECKPOINT_SHA256" in text
+    assert "codec_checkpoint_sha256" in text
 
 
 def test_dependent_event_job_uses_exact_fixed_step_checkpoints() -> None:
@@ -234,6 +236,7 @@ printf '%s\n' "$value"
 set -euo pipefail
 case "$1" in
   *manifest.parquet) digest=33abbb623072932431871a612620110c473d4b664c52010e5763c273c6daf10e ;;
+  *codec.pth) digest=3c286c59b74cd141e72af69cde1a0a005142d8d2b472c789cdf2a39a140c4b7a ;;
   *single.pth) digest=3dbd8f0e43dbe833a5f36370d75f6306c7aa036dfcd3edba767ab138232fa047 ;;
   *) exit 2 ;;
 esac
@@ -288,4 +291,8 @@ printf '%s  %s\n' "$digest" "$1"
     submission = json.loads((output_root / "submission_manifest.json").read_text(encoding="utf-8"))
     assert submission["schema"] == "mira-cs2-clariden-submission-v1"
     assert submission["contract"]["training_seeds"] == [28, 29, 30]
+    assert (
+        submission["contract"]["codec_checkpoint_sha256"]
+        == "3c286c59b74cd141e72af69cde1a0a005142d8d2b472c789cdf2a39a140c4b7a"
+    )
     assert submission["slurm"]["finalize_job"] == "1007"

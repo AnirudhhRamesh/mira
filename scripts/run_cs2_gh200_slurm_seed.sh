@@ -25,6 +25,7 @@ prefetch_factor=${CS1K_DATALOADER_PREFETCH_FACTOR:-2}
 persistent_workers=${CS1K_DATALOADER_PERSISTENT_WORKERS:-true}
 pin_memory=${CS1K_DATALOADER_PIN_MEMORY:-true}
 expected_manifest_sha256=33abbb623072932431871a612620110c473d4b664c52010e5763c273c6daf10e
+expected_codec_sha256=${CS1K_EXPECTED_CODEC_CHECKPOINT_SHA256:-3c286c59b74cd141e72af69cde1a0a005142d8d2b472c789cdf2a39a140c4b7a}
 expected_mira_commit=${CS1K_EXPECTED_MIRA_COMMIT:-}
 
 : "${SLURM_JOB_ID:?Run through sbatch or inside a four-node Slurm allocation}"
@@ -69,6 +70,10 @@ for path in "$manifest_path" "$split_provenance" "$codec_checkpoint"; do
 done
 if [[ "$(sha256sum "$manifest_path" | cut -d' ' -f1)" != "$expected_manifest_sha256" ]]; then
   echo "Confirmatory manifest SHA-256 drifted" >&2
+  exit 1
+fi
+if [[ "$(sha256sum "$codec_checkpoint" | cut -d' ' -f1)" != "$expected_codec_sha256" ]]; then
+  echo "Codec checkpoint SHA-256 drifted" >&2
   exit 1
 fi
 
@@ -154,6 +159,7 @@ export CS1K_DATALOADER_PIN_MEMORY="$selected_pin"
 export CS1K_GLOBAL_LOADER_SELECTION="$selection_path"
 export CS1K_CONFIRMATORY_SPLIT_PROVENANCE="$split_provenance"
 export CS1K_CODEC_CHECKPOINT="$codec_checkpoint"
+export CS1K_EXPECTED_CODEC_CHECKPOINT_SHA256="$expected_codec_sha256"
 export CS1K_OUTPUT_ROOT="$output_root"
 export CS1K_TRAIN_STEPS="$train_steps"
 export CS1K_ARM_HOURS="$arm_hours"
