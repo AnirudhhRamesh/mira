@@ -266,14 +266,16 @@ from pathlib import Path
 seeds = [int(value) for value in seed_text.split()]
 training_jobs = training_job_text.split()
 event_jobs = event_job_text.split()
+if len(training_jobs) != len(seeds) or len(event_jobs) != len(seeds):
+    raise SystemExit("Submitted job counts do not match the frozen seed list")
 payload = {
     "schema": "mira-cs2-clariden-submission-v2",
     "status": "submitted",
     "slurm": {
         "account": account,
         "partition": partition,
-        "training_jobs": dict(zip(map(str, seeds), training_jobs, strict=True)),
-        "event_jobs": dict(zip(map(str, seeds), event_jobs, strict=True)),
+        "training_jobs": dict(zip(map(str, seeds), training_jobs)),
+        "event_jobs": dict(zip(map(str, seeds), event_jobs)),
         "finalize_job": finalize_job_id,
         "log_root": str(Path(output).parent / "logs"),
     },

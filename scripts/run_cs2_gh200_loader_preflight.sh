@@ -78,10 +78,17 @@ fi
 mapfile -t visible_gpu_names < <(
   nvidia-smi --query-gpu=name --format=csv,noheader | sed 's/[[:space:]]*$//'
 )
-if [[ ${#visible_gpu_names[@]} -ne 1 || "${visible_gpu_names[0],,}" != *gh200* ]]; then
-  echo "Expected exactly one scheduler-visible GH200, found: ${visible_gpu_names[*]:-none}" >&2
+if [[ ${#visible_gpu_names[@]} -ne 4 ]]; then
+  echo "Expected the allocated node's four scheduler-visible GH200s, found: ${visible_gpu_names[*]:-none}" >&2
   exit 1
 fi
+for gpu_name in "${visible_gpu_names[@]}"; do
+  if [[ "${gpu_name,,}" != *gh200* ]]; then
+    echo "Expected four GH200s, found: ${visible_gpu_names[*]}" >&2
+    exit 1
+  fi
+done
+visible_gpu_names_joined=$(IFS='|'; printf '%s' "${visible_gpu_names[*]}")
 
 node_root=$benchmark_root/$node_hostname
 mkdir -p "$node_root"
@@ -91,6 +98,8 @@ printf '%s\n' \
   "slurm_job_id=$SLURM_JOB_ID" \
   "slurm_procid=$SLURM_PROCID" \
   "slurm_nodeid=$SLURM_NODEID" \
+  "visible_gpu_count=${#visible_gpu_names[@]}" \
+  "visible_gpu_names=$visible_gpu_names_joined" \
   "git_commit=$(git rev-parse HEAD)" \
   "manifest_path=$(realpath "$manifest_path")" \
   "manifest_sha256=$observed_manifest_sha256" \

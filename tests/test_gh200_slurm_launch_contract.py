@@ -67,6 +67,7 @@ def test_publication_launcher_rejects_non_slurm_invocation() -> None:
 
 def test_slurm_orchestrator_requests_exact_one_node_four_gpu_topology() -> None:
     text = (ROOT / "scripts" / "run_cs2_gh200_slurm_seed.sh").read_text()
+    preflight = (ROOT / "scripts" / "run_cs2_gh200_loader_preflight.sh").read_text()
     assert "--nodes=1" in text
     assert "--ntasks-per-node=1" in text
     assert "--gpus-per-task=4" in text
@@ -76,6 +77,8 @@ def test_slurm_orchestrator_requests_exact_one_node_four_gpu_topology() -> None:
     assert "--num-workers auto" in text
     assert "--expected-host-count 1" in text
     assert "--nodes=4" not in text
+    assert '${#visible_gpu_names[@]} -ne 4' in preflight
+    assert "visible_gpu_count=${#visible_gpu_names[@]}" in preflight
     assert "run_cs2_gh200_sync_control_eval.sh" in text
     assert "CS1K_TRAIN_STEPS" in text
 
@@ -161,6 +164,8 @@ def test_login_node_submitter_does_not_execute_uenv_python() -> None:
     assert '[[ ! -x "$path" && ! -L "$path" ]]' in text
     assert '"$output_root/submission_manifest.json"' in text
     assert "Refusing to reuse an already submitted or finalized sweep" in text
+    assert "strict=True" not in text
+    assert "Submitted job counts do not match the frozen seed list" in text
 
 
 def test_clariden_dataset_stage_is_pinned_and_fail_closed() -> None:
